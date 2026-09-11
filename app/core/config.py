@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
+    # One-time bootstrap for the very first SUPER_ADMIN in an environment
+    # with no shell/DB access available (see app/api/routes/auth.py). Blank
+    # disables the endpoint entirely (404) — set it, call the endpoint
+    # once, then unset it. Never leave this set.
+    BOOTSTRAP_TOKEN: str = ""
+
     # Email (GGH-202 lead notifications). Stubbed for Phase 0 — see
     # app/services/email.py. Fill in once a Resend (or similar) account exists.
     RESEND_API_KEY: str = ""

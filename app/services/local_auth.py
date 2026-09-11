@@ -15,10 +15,16 @@ from typing import Any
 
 import bcrypt
 import jwt
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.organization import Organization
+from app.models.user import User
 
 ALGORITHM = "HS256"
+
+INTERNAL_ORG_NAME = "GG HighTech (Internal)"
+INTERNAL_ORG_DOMAIN = "gghightech.internal"
 
 
 def hash_password(password: str) -> str:
@@ -44,3 +50,34 @@ def decode_access_token(token: str) -> dict[str, Any]:
     """Raises jwt.ExpiredSignatureError or jwt.PyJWTError on failure —
     callers (app/services/auth.py) decide what that means for the request."""
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+
+
+def create_or_update_superadmin(db: Session, email: str, password: str, full_name: str) -> User:
+    """Shared by `python -m app.cli create-superadmin` and the one-time
+    BOOTSTRAP_TOKEN-gated endpoint (app/api/routes/auth.py) — both are ways
+    to create the very first login before there's an admin session to
+    invite anyone through the ordinary API."""
+    org = db.query(Organization).filter(Organization.domain == INTERNAL_ORG_DOMAIN).first()
+    if not org:
+        org = Organization(name=INTERNAL_ORG_NAME, domain=INTERNAL_ORG_DOMAIN, plan_tier="INTERNAL")
+        db.add(org)
+        db.flush()
+
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        user.password_hash = hash_password(password)
+        user.role = "SUPER_ADMIN"
+        user.full_name = full_name
+    else:
+        user = User(
+            org_id=org.id,
+            email=email,
+            password_hash=hash_password(password),
+            full_name=full_name,
+            role="SUPER_ADMIN",
+        )
+        db.add(user)
+
+    db.commit()
+    db.refresh(user)
+    return user

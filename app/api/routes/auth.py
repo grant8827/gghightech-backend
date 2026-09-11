@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -6,7 +8,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, LoginResponse
 from app.services.auth import AuthenticatedUser, get_current_user
-from app.services.local_auth import create_access_token, verify_password
+from app.services.local_auth import create_access_token, create_or_update_superadmin, verify_password
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -31,3 +33,27 @@ def me(user: AuthenticatedUser = Depends(get_current_user)) -> dict:
     """Lets the frontend verify a stored token is still valid and see who
     it belongs to, without needing to decode the JWT client-side."""
     return {"email": user.email, "role": user.role}
+
+
+@router.post("/bootstrap-superadmin", status_code=201)
+def bootstrap_superadmin(
+    payload: LoginRequest,
+    full_name: Optional[str] = None,
+    x_bootstrap_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    """One-time way to create the first SUPER_ADMIN in an environment with
+    no shell/DB access (e.g. a managed platform where `railway ssh`-style
+    access isn't available). Inert unless BOOTSTRAP_TOKEN is set — set it,
+    call this once, then unset it. See app/core/config.py.
+
+    Every failure mode (missing token, wrong token, no full_name) returns
+    the same plain 404 — nothing distinguishes "this endpoint doesn't
+    exist" from "you got a parameter wrong", by design."""
+    if not settings.BOOTSTRAP_TOKEN or x_bootstrap_token != settings.BOOTSTRAP_TOKEN or not full_name:
+        raise HTTPException(404)
+    if len(payload.password) < 12:
+        raise HTTPException(422, "Password must be at least 12 characters")
+
+    user = create_or_update_superadmin(db, payload.email, payload.password, full_name)
+    return {"email": user.email, "role": user.role, "id": str(user.id)}
