@@ -1,16 +1,13 @@
 """
-Auth dependency backed by Clerk session tokens.
+Auth dependency — checks three sources, in order, for who's calling:
 
-The frontend (via @clerk/nextjs) attaches a Clerk session JWT as a Bearer
-token; this verifies it against Clerk's JWKS and returns the claims.
-
-DEV-MODE FALLBACK: CLERK_JWKS_URL is blank until the Clerk account exists
-and its keys are added to .env (see .env.example). Until then, requests may
-instead send `X-Dev-User-Role` / `X-Dev-User-Email` headers to simulate a
-signed-in user — but ONLY when ENVIRONMENT=development. This unblocks
-building GGH-401 admin endpoints without waiting on Clerk sign-up, and is
-hard-disabled the moment real Clerk keys (or a non-dev environment) are
-configured, so it can never leak into staging/production.
+1. Our own self-issued JWT (app/services/local_auth.py) — real staff login,
+   e.g. the SUPER_ADMIN created via `python -m app.cli create-superadmin`.
+   Checked first since it's a local signature check, no network call.
+2. A Clerk session JWT, once CLERK_JWKS_URL/CLERK_ISSUER are configured.
+3. DEV-MODE FALLBACK: `X-Dev-User-Role` / `X-Dev-User-Email` headers, but
+   ONLY when ENVIRONMENT=development — never available once a real
+   environment is set, so it can't leak into staging/production.
 """
 
 from typing import Optional
@@ -23,13 +20,15 @@ from fastapi import Depends, Header, HTTPException, status
 from jwt import PyJWKClient
 
 from app.core.config import settings
+from app.services.local_auth import decode_access_token
 
 
 @dataclass
 class AuthenticatedUser:
-    clerk_user_id: str
-    email: Optional[str]
     role: str
+    email: Optional[str] = None
+    user_id: Optional[str] = None  # set when authenticated via local_auth
+    clerk_user_id: Optional[str] = None  # set when authenticated via Clerk
 
 
 @lru_cache(maxsize=1)
@@ -46,10 +45,22 @@ async def get_current_user(
     x_dev_user_role: Optional[str] = Header(default=None),
     x_dev_user_email: Optional[str] = Header(default=None),
 ) -> AuthenticatedUser:
-    if _clerk_configured():
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
+    token = None
+    if authorization and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
+
+    if token and settings.SECRET_KEY:
+        try:
+            claims = decode_access_token(token)
+            return AuthenticatedUser(user_id=claims["sub"], email=claims.get("email"), role=claims["role"])
+        except jwt.ExpiredSignatureError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired, please log in again") from exc
+        except jwt.PyJWTError:
+            pass  # not one of ours (wrong signature) — might be a Clerk token, keep trying
+
+    if _clerk_configured():
+        if not token:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
         try:
             signing_key = _jwks_client().get_signing_key_from_jwt(token)
             claims = jwt.decode(

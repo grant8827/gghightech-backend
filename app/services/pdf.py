@@ -6,7 +6,7 @@ from typing import Optional
 from fpdf import FPDF
 
 BRAND_COLOR = (17, 24, 39)  # near-black, matches the dark hero theme in GGH-101
-ACCENT_COLOR = (56, 189, 248)  # cyan accent
+ACCENT_COLOR = (232, 184, 75)  # gold, sampled from the logo — see frontend/app/globals.css
 
 
 def _latin1_safe(text: str) -> str:
@@ -27,6 +27,8 @@ def build_estimate_pdf(
     weeks_min: int,
     weeks_max: int,
     project_description: Optional[str] = None,
+    client_email: Optional[str] = None,
+    client_phone: Optional[str] = None,
 ) -> bytes:
     pdf = FPDF(format="Letter")
     pdf.add_page()
@@ -61,6 +63,16 @@ def build_estimate_pdf(
     pdf.cell(0, 7, f"Budget range: ${price_min:,.0f} - ${price_max:,.0f}", ln=True)
     pdf.cell(0, 7, f"Timeline: {weeks_min} - {weeks_max} weeks", ln=True)
     pdf.ln(10)
+
+    if client_email or client_phone:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, "Contact", ln=True)
+        pdf.set_font("Helvetica", "", 11)
+        if client_email:
+            pdf.cell(0, 7, f"Email: {client_email}", ln=True)
+        if client_phone:
+            pdf.cell(0, 7, f"Phone: {client_phone}", ln=True)
+        pdf.ln(6)
 
     if project_description:
         pdf.set_font("Helvetica", "B", 13)

@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     CLERK_JWKS_URL: str = ""
     CLERK_ISSUER: str = ""
 
+    # Self-issued staff login (see app/services/local_auth.py) — real
+    # bcrypt password auth used until Clerk replaces it. Blank disables
+    # local login entirely (POST /auth/login returns 503) rather than
+    # ever falling back to a hardcoded default signing key. Generate one
+    # with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+    SECRET_KEY: str = ""
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+
     # Email (GGH-202 lead notifications). Stubbed for Phase 0 — see
     # app/services/email.py. Fill in once a Resend (or similar) account exists.
     RESEND_API_KEY: str = ""

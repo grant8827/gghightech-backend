@@ -47,6 +47,7 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
 
     estimate = Estimate(
         client_email=payload.client_email,
+        client_phone=payload.client_phone,
         scope_configuration={
             "project_type": payload.project_type,
             "features": payload.features,
@@ -57,16 +58,19 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
         calculated_max_price=result.price_max,
         estimated_weeks_min=result.weeks_min,
         estimated_weeks_max=result.weeks_max,
-        status="SUBMITTED" if payload.client_email else "DRAFT",
+        status="SUBMITTED" if (payload.client_email or payload.client_phone) else "DRAFT",
     )
     db.add(estimate)
     db.commit()
     db.refresh(estimate)
 
-    if payload.client_email:
+    if payload.client_email or payload.client_phone:
+        contact = payload.client_email or "(no email given)"
+        if payload.client_phone:
+            contact += f" / {payload.client_phone}"
         send_lead_notification(
             estimate_id=str(estimate.id),
-            client_email=payload.client_email,
+            client_email=contact,
             summary=f"{payload.project_type} / {payload.features} / {payload.design_tier} "
             f"-> ${result.price_min:,.0f}-${result.price_max:,.0f}, {result.weeks_min}-{result.weeks_max}wks"
             + (f" | client says: {payload.project_description}" if payload.project_description else ""),
@@ -108,6 +112,8 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
         weeks_min=estimate.estimated_weeks_min,
         weeks_max=estimate.estimated_weeks_max,
         project_description=estimate.project_description,
+        client_email=estimate.client_email,
+        client_phone=estimate.client_phone,
     )
     return Response(
         content=pdf_bytes,
