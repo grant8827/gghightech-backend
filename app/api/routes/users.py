@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -7,7 +8,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserInvite, UserOut
-from app.services.auth import require_roles
+from app.services.auth import AuthenticatedUser, get_current_user, require_roles
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 logger = logging.getLogger("gghightech.users")
@@ -41,3 +42,18 @@ def invite_user(payload: UserInvite, db: Session = Depends(get_db)) -> User:
 @router.get("", response_model=list[UserOut], dependencies=[Depends(require_roles(*_STAFF_ROLES))])
 def list_users(db: Session = Depends(get_db)) -> list[User]:
     return db.query(User).order_by(User.created_at.desc()).all()
+
+
+@router.delete("/{user_id}", status_code=204)
+def delete_user(
+    user_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: AuthenticatedUser = Depends(require_roles("SUPER_ADMIN")),
+) -> None:
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if current_user.user_id and str(user.id) == current_user.user_id:
+        raise HTTPException(400, "Cannot delete your own account")
+    db.delete(user)
+    db.commit()
