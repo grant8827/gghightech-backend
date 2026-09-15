@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.estimate import Estimate
 from app.schemas.estimate import EstimateCreate, EstimateOut, EstimatePreview
+from app.services.audit import record_audit_event
 from app.services.auth import require_roles
 from app.services.email import send_lead_notification
 from app.services.pdf import build_estimate_pdf
@@ -61,6 +62,15 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
         status="SUBMITTED" if (payload.client_email or payload.client_phone) else "DRAFT",
     )
     db.add(estimate)
+    db.flush()  # assigns estimate.id so the audit row below can reference it
+    record_audit_event(
+        db,
+        user=None,  # public lead-capture endpoint, no signed-in caller
+        action="estimate.create",
+        resource_type="estimate",
+        resource_id=estimate.id,
+        metadata={"project_type": payload.project_type, "features": payload.features},
+    )
     db.commit()
     db.refresh(estimate)
 
