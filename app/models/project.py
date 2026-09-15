@@ -12,8 +12,9 @@ from app.db.session import Base
 PROJECT_STATUSES = ("DISCOVERY", "IN_PROGRESS", "QA", "DELIVERED")
 
 # GGH-302 — no CI webhook exists yet, so this is set manually via
-# PATCH /projects/{id}/deployment (same "stub until real CI exists" pattern
-# as _send_clerk_invite_stub in users.py) until a GitHub Actions job calls it.
+# PATCH /projects/{id}/deployment (same "stub until real infra exists"
+# pattern as the invite-email stub in app/services/email.py) until a
+# GitHub Actions job calls it.
 DEPLOYMENT_STATUSES = ("PENDING", "SUCCESS", "FAILED")
 
 

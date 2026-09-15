@@ -23,11 +23,9 @@ class User(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"))
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
 
-    # Nullable: SSO-only users (via Clerk) never get a local password hash.
+    # Nullable: null means "invited but hasn't been through
+    # POST /auth/accept-invite yet" — see app/api/routes/users.py.
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-
-    # Set once a user has signed in through Clerk — links our row to theirs.
-    clerk_user_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
 
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="CLIENT_VIEWER")

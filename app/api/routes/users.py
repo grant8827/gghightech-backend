@@ -1,4 +1,3 @@
-import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,21 +8,13 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserInvite, UserOut
 from app.services.audit import record_audit_event
-from app.services.auth import AuthenticatedUser, get_current_user, require_roles
+from app.services.auth import AuthenticatedUser, require_roles
+from app.services.email import send_invite_email
+from app.services.local_auth import create_invite_token
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
-logger = logging.getLogger("gghightech.users")
 
 _STAFF_ROLES = ("SUPER_ADMIN", "PROJECT_MANAGER")
-
-
-def _send_clerk_invite_stub(email: str, org_id: str, role: str) -> None:
-    """Stand-in for the real Clerk invitation API call (creates a magic-link
-    sign-up for the user). Wired up once a Clerk account/secret key exists —
-    same pattern as app/services/email.py."""
-    if settings.CLERK_SECRET_KEY:
-        raise NotImplementedError("CLERK_SECRET_KEY is set but the Clerk invitations API call isn't wired up yet")
-    logger.info("STUB CLERK INVITE — would invite %s to org %s as %s", email, org_id, role)
 
 
 @router.post("/invite", response_model=UserOut, status_code=201)
@@ -50,7 +41,9 @@ def invite_user(
     db.commit()
     db.refresh(user)
 
-    _send_clerk_invite_stub(payload.email, str(payload.org_id), payload.role)
+    invite_token = create_invite_token(str(user.id))
+    invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={invite_token}"
+    send_invite_email(user.email, user.full_name, invite_link)
     return user
 
 

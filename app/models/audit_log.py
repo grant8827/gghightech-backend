@@ -23,9 +23,9 @@ class AuditLog(Base):
     # never want a later org deletion to cascade-delete its audit trail.
     org_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
 
-    # user_id (local auth) or clerk_user_id — whichever authenticated the
-    # caller. Null for genuinely unauthenticated mutations (e.g. the public
-    # lead-capture estimate endpoint), where actor_role is "ANONYMOUS".
+    # The authenticated caller's user id. Null for genuinely unauthenticated
+    # mutations (e.g. the public lead-capture estimate endpoint), where
+    # actor_role is "ANONYMOUS".
     actor_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     actor_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     actor_role: Mapped[str] = mapped_column(String(50), nullable=False)

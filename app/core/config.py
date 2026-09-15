@@ -18,20 +18,19 @@ class Settings(BaseSettings):
     # Local Postgres by default — see gghightech_dev created for Phase 0.
     DATABASE_URL: str = "postgresql+psycopg2://localhost/gghightech_dev"
 
-    # Frontend origin(s) allowed to call this API.
+    # Frontend origin(s) allowed to call this API (CORS).
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
-    # Clerk (auth). Left blank until the Clerk account/keys are provisioned —
-    # see app/services/auth.py for the dev-mode fallback this enables.
-    CLERK_SECRET_KEY: str = ""
-    CLERK_JWKS_URL: str = ""
-    CLERK_ISSUER: str = ""
+    # The canonical frontend origin, for building links that get emailed out
+    # (e.g. the invite-accept link in app/api/routes/users.py). Distinct from
+    # CORS_ORIGINS, which is "who may call this API," not "where the app is."
+    FRONTEND_URL: str = "http://localhost:3000"
 
-    # Self-issued staff login (see app/services/local_auth.py) — real
-    # bcrypt password auth used until Clerk replaces it. Blank disables
-    # local login entirely (POST /auth/login returns 503) rather than
-    # ever falling back to a hardcoded default signing key. Generate one
-    # with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+    # Self-issued email/password login (see app/services/local_auth.py) —
+    # the site's only auth system. Blank disables local login entirely
+    # (POST /auth/login returns 503) rather than ever falling back to a
+    # hardcoded default signing key. Generate one with
+    # `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
     SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 

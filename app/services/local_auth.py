@@ -1,13 +1,18 @@
 """
-Self-issued email/password login for staff.
+Self-issued email/password login — the site's only auth system.
 
-This exists so a real admin login works today, without waiting on a Clerk
-account. It's a genuine auth path (bcrypt hashing, a server-signed JWT with
-an expiry) — not a placeholder — and it keeps working as a fallback even
-after Clerk is configured, since app/services/auth.py checks this first.
+Genuine auth path: bcrypt hashing, server-signed JWTs with an expiry. Two
+token kinds share this signing key but are never interchangeable:
+  - access tokens (create_access_token/decode_access_token): a signed-in
+    session, carries role/email for app/services/auth.py to trust.
+  - invite tokens (create_invite_token/decode_invite_token): a one-time,
+    longer-lived link emailed to a newly-invited user (see
+    app/api/routes/users.py's invite_user) so they can set their own
+    password at POST /auth/accept-invite. Tagged with "purpose": "invite"
+    so one can never be used in place of the other.
 
-The first (and so far only) account this issues tokens for is created via
-`python -m app.cli create-superadmin` — see that file.
+The first (and so far only) staff account this issues tokens for is created
+via `python -m app.cli create-superadmin` — see that file.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -22,6 +27,7 @@ from app.models.organization import Organization
 from app.models.user import User
 
 ALGORITHM = "HS256"
+INVITE_TOKEN_EXPIRE_DAYS = 7
 
 INTERNAL_ORG_NAME = "GG HighTech (Internal)"
 INTERNAL_ORG_DOMAIN = "gghightech.internal"
@@ -50,6 +56,21 @@ def decode_access_token(token: str) -> dict[str, Any]:
     """Raises jwt.ExpiredSignatureError or jwt.PyJWTError on failure —
     callers (app/services/auth.py) decide what that means for the request."""
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+
+
+def create_invite_token(user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(days=INVITE_TOKEN_EXPIRE_DAYS)
+    payload = {"sub": user_id, "purpose": "invite", "exp": expire}
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_invite_token(token: str) -> dict[str, Any]:
+    """Raises jwt.ExpiredSignatureError or jwt.PyJWTError (including our own
+    InvalidTokenError below) on failure — see decode_access_token."""
+    claims = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    if claims.get("purpose") != "invite":
+        raise jwt.InvalidTokenError("Not an invite token")
+    return claims
 
 
 def create_or_update_superadmin(db: Session, email: str, password: str, full_name: str) -> User:

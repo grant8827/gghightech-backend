@@ -12,3 +12,8 @@ class LoginResponse(BaseModel):
     role: str
     email: str
     full_name: str
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    password: str

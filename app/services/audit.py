@@ -29,7 +29,7 @@ def record_audit_event(
     db.add(
         AuditLog(
             org_id=org_id,
-            actor_id=(user.user_id or user.clerk_user_id) if user else None,
+            actor_id=user.user_id if user else None,
             actor_email=user.email if user else None,
             actor_role=user.role if user else "ANONYMOUS",
             action=action,
