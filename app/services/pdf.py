@@ -1,6 +1,8 @@
-"""GGH-202 — technical proposal PDF export for a computed estimate."""
+"""GGH-202 — technical proposal PDF export for a computed estimate.
+Also builds milestone-approval invoice PDFs (app/api/routes/invoices.py)."""
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from fpdf import FPDF
@@ -93,5 +95,56 @@ def build_estimate_pdf(
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(0, 5, f"Estimate reference: {estimate_id}", ln=True)
+
+    return bytes(pdf.output())
+
+
+def build_invoice_pdf(
+    invoice_id: uuid.UUID,
+    project_title: str,
+    milestone_title: str,
+    amount: float,
+    status: str,
+    created_at: datetime,
+    paid_at: Optional[datetime] = None,
+) -> bytes:
+    pdf = FPDF(format="Letter")
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*BRAND_COLOR)
+    pdf.cell(0, 12, "GG HighTech", ln=True)
+
+    pdf.set_font("Helvetica", "", 12)
+    pdf.set_text_color(90, 90, 90)
+    pdf.cell(0, 8, "Invoice", ln=True)
+    pdf.ln(4)
+
+    pdf.set_draw_color(*ACCENT_COLOR)
+    pdf.set_line_width(0.8)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(8)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Billed for", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"Project: {_latin1_safe(project_title)}", ln=True)
+    pdf.cell(0, 7, f"Milestone: {_latin1_safe(milestone_title)}", ln=True)
+    pdf.ln(6)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Amount", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"${amount:,.2f}", ln=True)
+    pdf.cell(0, 7, f"Status: {status}", ln=True)
+    pdf.cell(0, 7, f"Issued: {created_at.strftime('%Y-%m-%d')}", ln=True)
+    if paid_at:
+        pdf.cell(0, 7, f"Paid: {paid_at.strftime('%Y-%m-%d')}", ln=True)
+    pdf.ln(10)
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(130, 130, 130)
+    pdf.cell(0, 5, f"Invoice reference: {invoice_id}", ln=True)
 
     return bytes(pdf.output())

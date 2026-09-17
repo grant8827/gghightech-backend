@@ -3,7 +3,19 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import audit, auth, estimates, health, milestones, organizations, projects, users, ws
+from app.api.routes import (
+    audit,
+    auth,
+    estimates,
+    health,
+    invoices,
+    milestones,
+    organizations,
+    projects,
+    updates,
+    users,
+    ws,
+)
 from app.core.config import settings
 from app.middleware import SecurityHeadersMiddleware
 
@@ -28,4 +40,6 @@ app.include_router(projects.router)
 app.include_router(milestones.router)
 app.include_router(users.router)
 app.include_router(audit.router)
+app.include_router(invoices.router)
+app.include_router(updates.router)
 app.include_router(ws.router)

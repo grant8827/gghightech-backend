@@ -1,0 +1,33 @@
+"""Created only by POST /milestones/{id}/approve — no direct create route.
+Stripe stays stubbed (app/services/stripe_service.py) until a real account
+exists; PATCH /invoices/{id}/mark-paid covers real-world payments (check,
+wire) made outside Stripe in the meantime."""
+
+from typing import Optional
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.session import Base
+
+INVOICE_STATUSES = ("PENDING", "PAID")
+
+
+class Invoice(Base):
+    __tablename__ = "invoices"
+    __table_args__ = (CheckConstraint(f"status IN {INVOICE_STATUSES}", name="ck_invoices_status_valid"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"))
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    milestone_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("milestones.id", ondelete="CASCADE")
+    )
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -45,5 +45,9 @@ class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
     LEAD_NOTIFICATION_EMAIL: str = "leads@gghightech.example"
 
+    # Billing (invoice payment). Stubbed — see app/services/stripe_service.py.
+    # Fill in once a Stripe account exists.
+    STRIPE_SECRET_KEY: str = ""
+
 
 settings = Settings()

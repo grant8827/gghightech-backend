@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -82,13 +83,54 @@ async def get_current_user(
     return await resolve_authenticated_user(token, x_dev_user_role, x_dev_user_email)
 
 
+def _apply_rls_context(db: Session, org_id: Optional[uuid.UUID]) -> None:
+    """Sets the two Postgres session vars the row-level-security policies
+    (see the "tenant_isolation" migration) key off. This is defense-in-depth
+    *under* the org_id filtering routes already do themselves
+    (get_current_user_org_id et al.) — it doesn't replace that filtering, it
+    backstops it so a missed WHERE clause or a future raw query still can't
+    cross tenants.
+
+    org_id=None means "staff" (bypasses RLS entirely, matching their existing
+    unrestricted app-level access); a UUID scopes strictly to that org.
+
+    Plain SET, not SET LOCAL: routes routinely db.commit() mid-request (e.g.
+    create-then-refresh) and SET LOCAL's effect ends at that commit, which
+    would leave the *next* query in the same request running with no RLS
+    context at all — not just "less scoped," but fail-closed (see the
+    policy's NULLIF handling) and erroring. A session-level SET survives
+    those commits for the rest of the request; app/db/session.py's get_db()
+    RESETs both vars before the connection goes back to the pool, so this
+    still can't leak into whichever request reuses that connection next.
+
+    Deliberately never SET app.current_org_id to '' or leave it untouched
+    on the bypass path — the policy (see migration e90e0a659dc5) has to
+    tolerate that GUC coming back as an empty string, not just NULL: once
+    a pooled connection has had it SET at least once, RESET reverts it to
+    '' (not NULL), and Postgres doesn't guarantee OR short-circuits, so
+    bypass_rls=true alone can't be trusted to protect the ::uuid cast from
+    ever seeing it."""
+    if org_id is not None:
+        db.execute(text("SET app.bypass_rls = 'false'"))
+        # org_id is always a uuid.UUID here (never raw user input), so
+        # stringifying it into the SQL is safe — SET doesn't support bind
+        # parameters the way ordinary queries do.
+        db.execute(text(f"SET app.current_org_id = '{org_id}'"))
+    else:
+        db.execute(text("SET app.bypass_rls = 'true'"))
+
+
 def resolve_org_id(db: Session, user: AuthenticatedUser) -> Optional[uuid.UUID]:
     """Resolves the caller's own org_id, for routes/sockets that must scope
     CLIENT_ADMIN/CLIENT_VIEWER callers to their own tenant (GGH-301/302).
     Returns None for staff roles (SUPER_ADMIN/PROJECT_MANAGER/LEAD_ENGINEER),
     who aren't tenant-scoped and may filter by an explicit org_id instead.
+    Also applies the RLS session context (see _apply_rls_context) as a side
+    effect, since every caller of this function has a live `db` session for
+    the rest of the request.
     """
     if user.role not in ("CLIENT_ADMIN", "CLIENT_VIEWER"):
+        _apply_rls_context(db, None)
         return None
 
     db_user: Optional[User] = None
@@ -100,6 +142,7 @@ def resolve_org_id(db: Session, user: AuthenticatedUser) -> Optional[uuid.UUID]:
     if not db_user:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No organization membership found for this account")
 
+    _apply_rls_context(db, db_user.org_id)
     return db_user.org_id
 
 
@@ -113,11 +156,19 @@ def get_current_user_org_id(
 
 def require_roles(*allowed_roles: str):
     """Dependency factory for RBAC-gated routes, e.g.
-    `Depends(require_roles("SUPER_ADMIN", "PROJECT_MANAGER"))`."""
+    `Depends(require_roles("SUPER_ADMIN", "PROJECT_MANAGER"))`. Every caller
+    of this is staff-only by construction, so it always sets the RLS bypass
+    context (see _apply_rls_context) — staff routes that touch RLS-protected
+    tables (projects, milestones, invoices, project_updates) would otherwise
+    see zero rows regardless of their app-level role check."""
 
-    async def checker(user: AuthenticatedUser = Depends(get_current_user)) -> AuthenticatedUser:
+    async def checker(
+        user: AuthenticatedUser = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> AuthenticatedUser:
         if user.role not in allowed_roles:
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"Requires one of roles: {allowed_roles}")
+        _apply_rls_context(db, None)
         return user
 
     return checker

@@ -4,6 +4,7 @@ manager and its single-process caveat."""
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.models.project import Project
@@ -17,29 +18,44 @@ router = APIRouter()
 async def project_updates(project_id: uuid.UUID, websocket: WebSocket, token: str = "") -> None:
     """A browser WebSocket can't send an Authorization header, so the caller
     passes its bearer token as a query param instead: `?token=...`."""
+    # The DB session is only needed for this initial auth+scope check — it's
+    # opened and closed here, not held for the connection's lifetime. A
+    # WebSocket can stay open for hours; holding a session (and its
+    # transaction) open that whole time left a connection permanently
+    # "idle in transaction," which blocked an unrelated ALTER TABLE
+    # elsewhere from ever acquiring its lock.
     db = SessionLocal()
     try:
         try:
             user = await resolve_authenticated_user(token or None)
             caller_org_id = resolve_org_id(db, user)
+            project = db.get(Project, project_id)
         except Exception:
             await websocket.close(code=4401)
             return
-
-        project = db.get(Project, project_id)
-        if not project or (caller_org_id is not None and project.org_id != caller_org_id):
-            await websocket.close(code=4404)
-            return
-
-        await manager.connect(project_id, websocket)
-        try:
-            while True:
-                # We never expect messages from the client — this just keeps
-                # the connection open and detects disconnects.
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            pass
-        finally:
-            manager.disconnect(project_id, websocket)
     finally:
+        # Same RESET-before-return-to-pool as app/db/session.py's get_db —
+        # resolve_org_id above sets session-level (not LOCAL) RLS GUCs now,
+        # since SET LOCAL doesn't survive a mid-request commit elsewhere.
+        try:
+            db.execute(text("RESET app.bypass_rls"))
+            db.execute(text("RESET app.current_org_id"))
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
+
+    if not project or (caller_org_id is not None and project.org_id != caller_org_id):
+        await websocket.close(code=4404)
+        return
+
+    await manager.connect(project_id, websocket)
+    try:
+        while True:
+            # We never expect messages from the client — this just keeps
+            # the connection open and detects disconnects.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        manager.disconnect(project_id, websocket)

@@ -6,9 +6,20 @@ schema via Base.metadata.
 
 from app.models.audit_log import AuditLog
 from app.models.estimate import Estimate
+from app.models.invoice import Invoice
 from app.models.milestone import Milestone
 from app.models.organization import Organization
 from app.models.project import Project
+from app.models.project_update import ProjectUpdate
 from app.models.user import User
 
-__all__ = ["Organization", "User", "Project", "Milestone", "Estimate", "AuditLog"]
+__all__ = [
+    "Organization",
+    "User",
+    "Project",
+    "Milestone",
+    "Estimate",
+    "AuditLog",
+    "Invoice",
+    "ProjectUpdate",
+]
