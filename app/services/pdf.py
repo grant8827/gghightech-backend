@@ -102,12 +102,14 @@ def build_estimate_pdf(
 def build_invoice_pdf(
     invoice_id: uuid.UUID,
     project_title: str,
-    milestone_title: str,
+    billed_for: str,
     amount: float,
     status: str,
     created_at: datetime,
     paid_at: Optional[datetime] = None,
 ) -> bytes:
+    """billed_for is a milestone's title for milestone-driven invoices, or
+    the invoice's own description for ad-hoc ones (see app/models/invoice.py)."""
     pdf = FPDF(format="Letter")
     pdf.add_page()
 
@@ -130,7 +132,7 @@ def build_invoice_pdf(
     pdf.cell(0, 8, "Billed for", ln=True)
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 7, f"Project: {_latin1_safe(project_title)}", ln=True)
-    pdf.cell(0, 7, f"Milestone: {_latin1_safe(milestone_title)}", ln=True)
+    pdf.cell(0, 7, f"For: {_latin1_safe(billed_for)}", ln=True)
     pdf.ln(6)
 
     pdf.set_font("Helvetica", "B", 13)

@@ -94,14 +94,27 @@ def _apply_rls_context(db: Session, org_id: Optional[uuid.UUID]) -> None:
     org_id=None means "staff" (bypasses RLS entirely, matching their existing
     unrestricted app-level access); a UUID scopes strictly to that org.
 
-    Plain SET, not SET LOCAL: routes routinely db.commit() mid-request (e.g.
-    create-then-refresh) and SET LOCAL's effect ends at that commit, which
-    would leave the *next* query in the same request running with no RLS
-    context at all — not just "less scoped," but fail-closed (see the
-    policy's NULLIF handling) and erroring. A session-level SET survives
-    those commits for the rest of the request; app/db/session.py's get_db()
-    RESETs both vars before the connection goes back to the pool, so this
-    still can't leak into whichever request reuses that connection next.
+    SET LOCAL, not plain SET: this used to be a session-level SET on the
+    theory that it needed to survive a route's later db.commit() (e.g.
+    create-then-refresh) — SET LOCAL's effect ends at commit, so the
+    refresh's SELECT would otherwise run with no context at all. That
+    theory was wrong in a way that only showed up under real concurrent
+    load: SQLAlchemy's Session doesn't keep the same physical connection
+    across a commit — db.commit() ends the transaction and *may* hand the
+    Session a different pooled connection for the next one. A session-level
+    SET lives on whichever connection it was run on; if commit swaps
+    connections, the "survives commits" SET is sitting on a connection
+    nobody's using anymore, and the new one never got set at all. This
+    reliably reproduced through the browser (several concurrent requests
+    contending for the pool) and never through sequential curl (no
+    contention, so the same connection kept getting reused by luck).
+
+    SET LOCAL doesn't have that failure mode, because it's not trying to
+    outlive its transaction — it's tied to the current transaction on
+    whichever connection is *actually* live right now. Any route that
+    commits mid-request and then runs another RLS-relevant query must
+    re-apply this (see commit_with_rls_refresh below) rather than assume
+    the first call's effect carries forward.
 
     Deliberately never SET app.current_org_id to '' or leave it untouched
     on the bypass path — the policy (see migration e90e0a659dc5) has to
@@ -111,13 +124,32 @@ def _apply_rls_context(db: Session, org_id: Optional[uuid.UUID]) -> None:
     bypass_rls=true alone can't be trusted to protect the ::uuid cast from
     ever seeing it."""
     if org_id is not None:
-        db.execute(text("SET app.bypass_rls = 'false'"))
+        db.execute(text("SET LOCAL app.bypass_rls = 'false'"))
         # org_id is always a uuid.UUID here (never raw user input), so
         # stringifying it into the SQL is safe — SET doesn't support bind
         # parameters the way ordinary queries do.
-        db.execute(text(f"SET app.current_org_id = '{org_id}'"))
+        db.execute(text(f"SET LOCAL app.current_org_id = '{org_id}'"))
     else:
-        db.execute(text("SET app.bypass_rls = 'true'"))
+        db.execute(text("SET LOCAL app.bypass_rls = 'true'"))
+
+
+def commit_with_rls_refresh(db: Session, obj, org_id: Optional[uuid.UUID]) -> None:
+    """db.commit() followed by db.refresh(obj), safe under RLS.
+
+    Every route that commits and then refreshes an RLS-protected row
+    (projects, milestones, invoices, project_updates) must use this instead
+    of calling db.commit()/db.refresh() directly — see the SET LOCAL note
+    on _apply_rls_context above for why the naive version silently returns
+    zero rows under concurrent load. commit() ends the current transaction,
+    the refresh's SELECT starts a new one, and _apply_rls_context has to be
+    re-run for *that* transaction, on whatever connection actually ends up
+    serving it, rather than trusting the pre-commit SET to still apply.
+
+    `org_id` should be the same value the route's own require_roles/
+    resolve_org_id call already resolved (None for staff)."""
+    db.commit()
+    _apply_rls_context(db, org_id)
+    db.refresh(obj)
 
 
 def resolve_org_id(db: Session, user: AuthenticatedUser) -> Optional[uuid.UUID]:

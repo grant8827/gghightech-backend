@@ -9,3 +9,4 @@ python-dotenv==1.2.1
 pyjwt[crypto]==2.10.1
 bcrypt==4.2.1
 fpdf2==2.8.2
+httpx==0.28.1

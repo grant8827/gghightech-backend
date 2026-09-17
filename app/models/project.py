@@ -40,6 +40,24 @@ class Project(Base):
     last_deploy_commit_sha: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     last_deploy_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     last_deployed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # GitHub sync (app/services/github_service.py) — "newest commit in the
+    # repo," distinct from last_deploy_* above ("what's actually running in
+    # staging"). Pulled on demand via POST /projects/{id}/sync-github.
+    latest_commit_sha: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    latest_commit_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    latest_commit_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Jira sync (app/services/jira_service.py) — informational issue-count
+    # snapshot pulled on demand via POST /projects/{id}/sync-jira. Deliberately
+    # does not feed overall_progress below: milestone progress stays the one
+    # staff-controlled number clients see, so a Jira sync can never silently
+    # move it.
+    jira_project_key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    jira_issue_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jira_done_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    jira_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="projects")
@@ -48,9 +66,9 @@ class Project(Base):
     @property
     def overall_progress(self) -> int:
         """GGH-301 — average of this project's milestones' progress_percentage.
-        A proxy for "dynamically calculated progress": there's no Jira (or
-        other task-tracker) integration to derive real task-level completion
-        from, so milestone progress is the finest-grained real signal we have.
+        A proxy for "dynamically calculated progress": Jira sync (jira_issue_count/
+        jira_done_count above) is informational only and never feeds this —
+        milestone progress stays the one staff-controlled number clients see.
         """
         if not self.milestones:
             return 0

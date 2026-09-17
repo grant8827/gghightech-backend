@@ -10,7 +10,7 @@ from app.models.project import Project
 from app.models.project_update import ProjectUpdate
 from app.models.user import User
 from app.schemas.project_update import ProjectUpdateCreate, ProjectUpdateOut
-from app.services.auth import AuthenticatedUser, get_current_user_org_id, require_roles
+from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, get_current_user_org_id, require_roles
 from app.ws import manager
 
 router = APIRouter(prefix="/api/v1/projects", tags=["updates"])
@@ -39,8 +39,7 @@ async def post_project_update(
         message=payload.message,
     )
     db.add(update)
-    db.commit()
-    db.refresh(update)
+    commit_with_rls_refresh(db, update, None)
     await manager.broadcast(project.id, {"type": "status_update"})
     return update
 

@@ -13,7 +13,13 @@ from app.models.project import Project
 from app.schemas.invoice import InvoiceOut
 from app.schemas.milestone import MilestoneCreate, MilestoneOut, MilestoneUpdate
 from app.services.audit import record_audit_event
-from app.services.auth import AuthenticatedUser, get_current_user, get_current_user_org_id, require_roles
+from app.services.auth import (
+    AuthenticatedUser,
+    commit_with_rls_refresh,
+    get_current_user,
+    get_current_user_org_id,
+    require_roles,
+)
 from app.ws import manager
 
 router = APIRouter(prefix="/api/v1/milestones", tags=["milestones"])
@@ -42,8 +48,7 @@ async def create_milestone(
         resource_id=milestone.id,
         metadata=payload.model_dump(mode="json"),
     )
-    db.commit()
-    db.refresh(milestone)
+    commit_with_rls_refresh(db, milestone, None)
     await manager.broadcast(milestone.project_id, {"type": "milestones_updated"})
     return milestone
 
@@ -88,8 +93,7 @@ async def update_milestone(
         resource_id=milestone.id,
         metadata=payload.model_dump(exclude_unset=True, mode="json"),
     )
-    db.commit()
-    db.refresh(milestone)
+    commit_with_rls_refresh(db, milestone, None)
     await manager.broadcast(milestone.project_id, {"type": "milestones_updated"})
     return milestone
 
@@ -138,7 +142,6 @@ async def approve_milestone(
         org_id=milestone.org_id,
         metadata={"invoice_id": str(invoice.id), "amount": float(milestone.amount)},
     )
-    db.commit()
-    db.refresh(invoice)
+    commit_with_rls_refresh(db, invoice, caller_org_id)
     await manager.broadcast(milestone.project_id, {"type": "invoice_created"})
     return invoice

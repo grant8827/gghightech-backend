@@ -49,5 +49,19 @@ class Settings(BaseSettings):
     # Fill in once a Stripe account exists.
     STRIPE_SECRET_KEY: str = ""
 
+    # GitHub sync (app/services/github_service.py). Optional — reads work
+    # unauthenticated against public repos (rate-limited by IP). Set this
+    # for private repos or a higher rate limit: a fine-grained PAT with
+    # read-only "Contents" access is enough.
+    GITHUB_TOKEN: str = ""
+
+    # Jira sync (app/services/jira_service.py). All three required — Jira's
+    # API needs auth for every call, unlike GitHub's. JIRA_BASE_URL is your
+    # site, e.g. https://your-team.atlassian.net; JIRA_API_TOKEN is created
+    # at id.atlassian.com/manage-profile/security/api-tokens.
+    JIRA_BASE_URL: str = ""
+    JIRA_EMAIL: str = ""
+    JIRA_API_TOKEN: str = ""
+
 
 settings = Settings()
