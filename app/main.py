@@ -9,9 +9,11 @@ from app.api.routes import (
     estimates,
     health,
     invoices,
+    jira_tickets,
     milestones,
     organizations,
     projects,
+    subscriptions,
     updates,
     users,
     ws,
@@ -42,4 +44,6 @@ app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(invoices.router)
 app.include_router(updates.router)
+app.include_router(jira_tickets.router)
+app.include_router(subscriptions.router)
 app.include_router(ws.router)

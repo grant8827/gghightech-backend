@@ -48,3 +48,43 @@ def fetch_issue_progress(project_key: str) -> dict:
     issues = resp.json().get("issues", [])
     done = sum(1 for issue in issues if issue["fields"]["status"]["statusCategory"]["key"] == "done")
     return {"issue_count": len(issues), "done_count": done}
+
+
+def create_issue(project_key: str, summary: str, description: str, issue_type: str = "Task") -> dict:
+    """Creates a real Jira issue via the Cloud v3 create-issue API. Same
+    not-configured check as fetch_issue_progress — never a partial/broken
+    call. description has to be Atlassian Document Format, not plain text;
+    a single-paragraph doc is all this needs."""
+    if not (settings.JIRA_BASE_URL and settings.JIRA_EMAIL and settings.JIRA_API_TOKEN):
+        raise JiraNotConfiguredError(
+            "Jira isn't connected yet — set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN."
+        )
+
+    payload = {
+        "fields": {
+            "project": {"key": project_key},
+            "summary": summary,
+            "issuetype": {"name": issue_type},
+            "description": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+            },
+        }
+    }
+    try:
+        resp = httpx.post(
+            f"{settings.JIRA_BASE_URL.rstrip('/')}/rest/api/3/issue",
+            json=payload,
+            auth=(settings.JIRA_EMAIL, settings.JIRA_API_TOKEN),
+            headers={"Accept": "application/json"},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        raise JiraSyncError(f"Could not reach Jira: {exc}") from exc
+
+    if resp.status_code != 201:
+        raise JiraSyncError(f"Jira API returned {resp.status_code}: {resp.text}")
+
+    key = resp.json()["key"]
+    return {"key": key, "url": f"{settings.JIRA_BASE_URL.rstrip('/')}/browse/{key}"}
