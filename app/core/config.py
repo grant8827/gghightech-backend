@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # Billing (invoice payment). Stubbed — see app/services/stripe_service.py.
     # Fill in once a Stripe account exists.
     STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
 
     # Optional AI-assisted estimate analysis. When blank, the estimator uses
     # the deterministic scope heuristics in app/services/scope_analysis.py.

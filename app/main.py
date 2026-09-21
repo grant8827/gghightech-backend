@@ -14,6 +14,7 @@ from app.api.routes import (
     organizations,
     projects,
     subscriptions,
+    stripe_webhooks,
     updates,
     users,
     ws,
@@ -46,4 +47,5 @@ app.include_router(invoices.router)
 app.include_router(updates.router)
 app.include_router(jira_tickets.router)
 app.include_router(subscriptions.router)
+app.include_router(stripe_webhooks.router)
 app.include_router(ws.router)
