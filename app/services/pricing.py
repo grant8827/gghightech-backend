@@ -72,17 +72,14 @@ class InvalidScopeError(ValueError):
     """Raised when the estimator receives an unrecognized option key."""
 
 
-def calculate_estimate(
-    project_type: str,
-    features: list[str],
-    design_tier: str = "STANDARD",
-) -> EstimateResult:
-    if project_type not in PROJECT_TYPES:
-        raise InvalidScopeError(f"Unknown project_type: {project_type!r}")
+def _price_with_features(base: EstimateResult, features: list[str], design_tier: str) -> EstimateResult:
+    """Shared by calculate_estimate (New) and calculate_update_estimate
+    (Update) — both are "a base price plus per-feature deltas, times a
+    design-tier multiplier," just with a different base. Maintenance
+    doesn't go through this at all — see calculate_maintenance."""
     if design_tier not in DESIGN_TIER_PRICE_MULTIPLIER:
         raise InvalidScopeError(f"Unknown design_tier: {design_tier!r}")
 
-    base = PROJECT_TYPES[project_type]
     price_min, price_max = base.price_min, base.price_max
     weeks_min, weeks_max = base.weeks_min, base.weeks_max
 
@@ -104,6 +101,59 @@ def calculate_estimate(
         weeks_min=weeks_min + weeks_delta,
         weeks_max=weeks_max + weeks_delta,
     )
+
+
+def calculate_estimate(
+    project_type: str,
+    features: list[str],
+    design_tier: str = "STANDARD",
+) -> EstimateResult:
+    """Request type: New. Full project-type base price + feature deltas."""
+    if project_type not in PROJECT_TYPES:
+        raise InvalidScopeError(f"Unknown project_type: {project_type!r}")
+    return _price_with_features(PROJECT_TYPES[project_type], features, design_tier)
+
+
+# Request type: Update existing project. No project-type base price — an
+# update to an existing app costs roughly the same per feature as building
+# that feature into a new one (FEATURE_DELTAS), plus a flat floor for the
+# ramp-up/integration/regression-testing overhead any change to an existing
+# codebase carries even before feature work starts.
+UPDATE_BASE = EstimateResult(800, 1_500, 1, 2)
+
+
+def calculate_update_estimate(features: list[str], design_tier: str = "STANDARD") -> EstimateResult:
+    """Request type: Update. Prices only the features being added/changed —
+    see UPDATE_BASE above for why there's no project-type base."""
+    return _price_with_features(UPDATE_BASE, features, design_tier)
+
+
+@dataclass(frozen=True)
+class MaintenancePlan:
+    monthly_min: float
+    monthly_max: float
+    hours_per_week_min: int
+    hours_per_week_max: int
+
+
+# Request type: Maintain existing project. A monthly retainer, not a
+# one-time build price — sized by the *type* of project (bigger surface
+# area needs more weekly upkeep: bug fixes, dependency bumps, monitoring,
+# small tweaks), not by feature toggles, which is why this doesn't go
+# through _price_with_features at all. Ranges are roughly proportional to
+# each project type's build-price band in PROJECT_TYPES above.
+MAINTENANCE_PLANS: dict[str, MaintenancePlan] = {
+    "LANDING_PAGE": MaintenancePlan(300, 600, 1, 2),
+    "WEB_APPLICATION": MaintenancePlan(1_200, 2_500, 4, 8),
+    "MOBILE_APP": MaintenancePlan(1_500, 3_000, 5, 10),
+    "CROSS_PLATFORM_ECOSYSTEM": MaintenancePlan(2_000, 4_000, 6, 12),
+}
+
+
+def calculate_maintenance(project_type: str) -> MaintenancePlan:
+    if project_type not in MAINTENANCE_PLANS:
+        raise InvalidScopeError(f"Unknown project_type: {project_type!r}")
+    return MAINTENANCE_PLANS[project_type]
 
 
 def apply_scope_adjustment(result: EstimateResult, adjustment_percent: int) -> EstimateResult:

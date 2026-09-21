@@ -16,6 +16,8 @@ from app.services.pricing import (
     apply_scope_adjustment,
     calculate_estimate,
     calculate_infrastructure,
+    calculate_maintenance,
+    calculate_update_estimate,
     infrastructure_totals,
 )
 from app.services.scope_analysis import analyze_scope
@@ -34,13 +36,39 @@ def preview_estimate(payload: EstimateOptions) -> EstimatePreview:
     without spamming the estimates table with draft rows. Persisting happens
     only in POST /estimates, when the user actually submits/exports."""
     try:
-        result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
+        if payload.request_type == "MAINTENANCE":
+            # A monthly retainer, not a one-time build — see
+            # app/services/pricing.py's MAINTENANCE_PLANS. No build price/
+            # timeline and no new infrastructure (it's already running).
+            plan = calculate_maintenance(payload.project_type)
+            return EstimatePreview(
+                request_type=payload.request_type,
+                calculated_min_price=0,
+                calculated_max_price=0,
+                estimated_weeks_min=0,
+                estimated_weeks_max=0,
+                infrastructure=[],
+                monthly_operating_min=0,
+                monthly_operating_max=0,
+                first_year_operating_min=0,
+                first_year_operating_max=0,
+                maintenance_monthly_min=plan.monthly_min,
+                maintenance_monthly_max=plan.monthly_max,
+                maintenance_hours_per_week_min=plan.hours_per_week_min,
+                maintenance_hours_per_week_max=plan.hours_per_week_max,
+            )
+
+        if payload.request_type == "UPDATE":
+            result = calculate_update_estimate(payload.features, payload.design_tier)
+        else:
+            result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
     except InvalidScopeError as exc:
         raise HTTPException(422, str(exc)) from exc
 
     infrastructure = calculate_infrastructure(payload.project_type, payload.features)
     monthly_min, monthly_max, first_year_min, first_year_max = infrastructure_totals(infrastructure)
     return EstimatePreview(
+        request_type=payload.request_type,
         calculated_min_price=result.price_min,
         calculated_max_price=result.price_max,
         estimated_weeks_min=result.weeks_min,
@@ -55,35 +83,60 @@ def preview_estimate(payload: EstimateOptions) -> EstimatePreview:
 
 @router.post("", response_model=EstimateOut, status_code=201)
 def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> Estimate:
-    try:
-        base_result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
-    except InvalidScopeError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
+    # Still analyzed for all three request types — useful staff context
+    # (complexity, detected requirements, risks) even on an update/
+    # maintenance inquiry — but its price/timeline adjustment_percent is
+    # only ever applied below for NEW/UPDATE, never MAINTENANCE.
     analysis = analyze_scope(
         payload.project_description, payload.project_type, payload.features, payload.design_tier
     )
-    result = apply_scope_adjustment(base_result, analysis.adjustment_percent)
-    infrastructure = calculate_infrastructure(
-        payload.project_type, payload.features, payload.project_description
-    )
-    monthly_min, monthly_max, first_year_min, first_year_max = infrastructure_totals(infrastructure)
-    infrastructure_data = [
-        {
-            "name": item.name,
-            "monthly_min": item.monthly_min,
-            "monthly_max": item.monthly_max,
-            "annual_min": item.annual_min,
-            "annual_max": item.annual_max,
-            "note": item.note,
-        }
-        for item in infrastructure
-    ]
+
+    scope_extra: dict = {}
+    try:
+        if payload.request_type == "MAINTENANCE":
+            plan = calculate_maintenance(payload.project_type)
+            result_min_price = result_max_price = 0.0
+            result_weeks_min = result_weeks_max = 0
+            infrastructure_data: list[dict] = []
+            monthly_min = monthly_max = first_year_min = first_year_max = 0.0
+            scope_extra = {
+                "maintenance_monthly_min": plan.monthly_min,
+                "maintenance_monthly_max": plan.monthly_max,
+                "maintenance_hours_per_week_min": plan.hours_per_week_min,
+                "maintenance_hours_per_week_max": plan.hours_per_week_max,
+            }
+        else:
+            if payload.request_type == "UPDATE":
+                base_result = calculate_update_estimate(payload.features, payload.design_tier)
+            else:
+                base_result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
+            result = apply_scope_adjustment(base_result, analysis.adjustment_percent)
+            result_min_price, result_max_price = result.price_min, result.price_max
+            result_weeks_min, result_weeks_max = result.weeks_min, result.weeks_max
+
+            infrastructure = calculate_infrastructure(
+                payload.project_type, payload.features, payload.project_description
+            )
+            monthly_min, monthly_max, first_year_min, first_year_max = infrastructure_totals(infrastructure)
+            infrastructure_data = [
+                {
+                    "name": item.name,
+                    "monthly_min": item.monthly_min,
+                    "monthly_max": item.monthly_max,
+                    "annual_min": item.annual_min,
+                    "annual_max": item.annual_max,
+                    "note": item.note,
+                }
+                for item in infrastructure
+            ]
+    except InvalidScopeError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     estimate = Estimate(
         client_email=payload.client_email,
         client_phone=payload.client_phone,
         scope_configuration={
+            "request_type": payload.request_type,
             "project_type": payload.project_type,
             "features": payload.features,
             "design_tier": payload.design_tier,
@@ -93,12 +146,13 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
             "monthly_operating_max": monthly_max,
             "first_year_operating_min": first_year_min,
             "first_year_operating_max": first_year_max,
+            **scope_extra,
         },
         project_description=payload.project_description,
-        calculated_min_price=result.price_min,
-        calculated_max_price=result.price_max,
-        estimated_weeks_min=result.weeks_min,
-        estimated_weeks_max=result.weeks_max,
+        calculated_min_price=result_min_price,
+        calculated_max_price=result_max_price,
+        estimated_weeks_min=result_weeks_min,
+        estimated_weeks_max=result_weeks_max,
         status="SUBMITTED" if (payload.client_email or payload.client_phone) else "DRAFT",
     )
     db.add(estimate)
@@ -118,11 +172,15 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
         contact = payload.client_email or "(no email given)"
         if payload.client_phone:
             contact += f" / {payload.client_phone}"
+        if payload.request_type == "MAINTENANCE":
+            price_summary = f"${scope_extra['maintenance_monthly_min']:,.0f}-${scope_extra['maintenance_monthly_max']:,.0f}/mo"
+        else:
+            price_summary = f"${result_min_price:,.0f}-${result_max_price:,.0f}, {result_weeks_min}-{result_weeks_max}wks"
         send_lead_notification(
             estimate_id=str(estimate.id),
             client_email=contact,
-            summary=f"{payload.project_type} / {payload.features} / {payload.design_tier} "
-            f"-> ${result.price_min:,.0f}-${result.price_max:,.0f}, {result.weeks_min}-{result.weeks_max}wks"
+            summary=f"{payload.request_type} / {payload.project_type} / {payload.features} / {payload.design_tier} "
+            f"-> {price_summary}"
             + (f" | client says: {payload.project_description}" if payload.project_description else ""),
         )
 
@@ -155,6 +213,7 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
         project_type=scope["project_type"],
         features=scope["features"],
         design_tier=scope["design_tier"],
+        request_type=scope.get("request_type", "NEW"),
         price_min=float(estimate.calculated_min_price),
         price_max=float(estimate.calculated_max_price),
         weeks_min=estimate.estimated_weeks_min,
@@ -166,6 +225,10 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
         monthly_operating_max=scope.get("monthly_operating_max", 0),
         first_year_operating_min=scope.get("first_year_operating_min", 0),
         first_year_operating_max=scope.get("first_year_operating_max", 0),
+        maintenance_monthly_min=scope.get("maintenance_monthly_min", 0),
+        maintenance_monthly_max=scope.get("maintenance_monthly_max", 0),
+        maintenance_hours_per_week_min=scope.get("maintenance_hours_per_week_min", 0),
+        maintenance_hours_per_week_max=scope.get("maintenance_hours_per_week_max", 0),
         client_email=estimate.client_email,
         client_phone=estimate.client_phone,
     )

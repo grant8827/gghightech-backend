@@ -19,6 +19,10 @@ def _latin1_safe(text: str) -> str:
     return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
+_REQUEST_TYPE_LABELS = {"NEW": "New Build", "UPDATE": "Project Update", "MAINTENANCE": "Maintenance Plan"}
+_REQUEST_TYPE_FEATURES_LABEL = {"UPDATE": "Features to update", "MAINTENANCE": "Features in use today"}
+
+
 def build_estimate_pdf(
     estimate_id: uuid.UUID,
     project_type: str,
@@ -28,6 +32,7 @@ def build_estimate_pdf(
     price_max: float,
     weeks_min: int,
     weeks_max: int,
+    request_type: str = "NEW",
     project_description: Optional[str] = None,
     client_email: Optional[str] = None,
     client_phone: Optional[str] = None,
@@ -37,6 +42,10 @@ def build_estimate_pdf(
     monthly_operating_max: float = 0,
     first_year_operating_min: float = 0,
     first_year_operating_max: float = 0,
+    maintenance_monthly_min: float = 0,
+    maintenance_monthly_max: float = 0,
+    maintenance_hours_per_week_min: int = 0,
+    maintenance_hours_per_week_max: int = 0,
 ) -> bytes:
     pdf = FPDF(format="Letter")
     pdf.add_page()
@@ -47,7 +56,7 @@ def build_estimate_pdf(
 
     pdf.set_font("Helvetica", "", 12)
     pdf.set_text_color(90, 90, 90)
-    pdf.cell(0, 8, "Technical Scope Proposal", ln=True)
+    pdf.cell(0, 8, _REQUEST_TYPE_LABELS.get(request_type, "Technical Scope Proposal"), ln=True)
     pdf.ln(4)
 
     pdf.set_draw_color(*ACCENT_COLOR)
@@ -60,16 +69,31 @@ def build_estimate_pdf(
     pdf.cell(0, 8, "Scope", ln=True)
     pdf.set_font("Helvetica", "", 11)
     pdf.cell(0, 7, f"Project type: {project_type.replace('_', ' ').title()}", ln=True)
-    pdf.cell(0, 7, f"Design tier: {design_tier.replace('_', ' ').title()}", ln=True)
+    if request_type != "MAINTENANCE":
+        pdf.cell(0, 7, f"Design tier: {design_tier.replace('_', ' ').title()}", ln=True)
     features_label = ", ".join(f.replace("_", " ").title() for f in features) or "None"
-    pdf.cell(0, 7, f"Features: {features_label}", ln=True)
+    pdf.cell(0, 7, f"{_REQUEST_TYPE_FEATURES_LABEL.get(request_type, 'Features')}: {features_label}", ln=True)
     pdf.ln(6)
 
     pdf.set_font("Helvetica", "B", 13)
     pdf.cell(0, 8, "Estimate", ln=True)
     pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 7, f"Budget range: ${price_min:,.0f} - ${price_max:,.0f}", ln=True)
-    pdf.cell(0, 7, f"Timeline: {weeks_min} - {weeks_max} weeks", ln=True)
+    if request_type == "MAINTENANCE":
+        pdf.cell(
+            0,
+            7,
+            f"Monthly retainer: ${maintenance_monthly_min:,.0f} - ${maintenance_monthly_max:,.0f}",
+            ln=True,
+        )
+        pdf.cell(
+            0,
+            7,
+            f"Estimated involvement: {maintenance_hours_per_week_min} - {maintenance_hours_per_week_max} hrs/week",
+            ln=True,
+        )
+    else:
+        pdf.cell(0, 7, f"Budget range: ${price_min:,.0f} - ${price_max:,.0f}", ln=True)
+        pdf.cell(0, 7, f"Timeline: {weeks_min} - {weeks_max} weeks", ln=True)
     pdf.ln(10)
 
     if infrastructure:
