@@ -29,6 +29,16 @@ class EstimateResult:
     weeks_max: int
 
 
+@dataclass(frozen=True)
+class InfrastructureCost:
+    name: str
+    monthly_min: float
+    monthly_max: float
+    annual_min: float = 0
+    annual_max: float = 0
+    note: str = ""
+
+
 # Base project types set the floor for price and timeline.
 PROJECT_TYPES: dict[str, EstimateResult] = {
     "LANDING_PAGE": EstimateResult(3_000, 6_000, 2, 3),
@@ -94,3 +104,55 @@ def calculate_estimate(
         weeks_min=weeks_min + weeks_delta,
         weeks_max=weeks_max + weeks_delta,
     )
+
+
+def apply_scope_adjustment(result: EstimateResult, adjustment_percent: int) -> EstimateResult:
+    """Apply an AI/heuristic complexity adjustment within a safe 0–35% band."""
+    percent = max(0, min(35, adjustment_percent))
+    multiplier = 1 + percent / 100
+    extra_weeks = math.ceil(result.weeks_max * percent / 100)
+    return EstimateResult(
+        price_min=_round_to_nearest_hundred(result.price_min * multiplier),
+        price_max=_round_to_nearest_hundred(result.price_max * multiplier),
+        weeks_min=result.weeks_min + (extra_weeks // 2),
+        weeks_max=result.weeks_max + extra_weeks,
+    )
+
+
+def calculate_infrastructure(project_type: str, features: list[str], description: str = "") -> list[InfrastructureCost]:
+    """Transparent first-year operating-cost assumptions, separate from build cost."""
+    text = description.lower()
+    items: list[InfrastructureCost] = []
+
+    if project_type in ("LANDING_PAGE", "WEB_APPLICATION", "CROSS_PLATFORM_ECOSYSTEM"):
+        items.append(InfrastructureCost("Domain registration", 0, 0, 15, 40, "Typical .com-style domain"))
+
+    hosting = {
+        "LANDING_PAGE": (10, 35),
+        "WEB_APPLICATION": (60, 250),
+        "MOBILE_APP": (75, 300),
+        "CROSS_PLATFORM_ECOSYSTEM": (125, 500),
+    }[project_type]
+    items.append(InfrastructureCost("Hosting & compute", *hosting, note="Scales with traffic and background jobs"))
+
+    if project_type != "LANDING_PAGE" or "database" in text or "portal" in text:
+        items.append(InfrastructureCost("Database & storage", 25, 175, note="Managed database, files, and backups"))
+        items.append(InfrastructureCost("Monitoring & backups", 10, 80, note="Error tracking, uptime checks, and retention"))
+    if "AUTH" in features or any(word in text for word in ("email", "notification", "invite", "reset password")):
+        items.append(InfrastructureCost("Transactional email", 10, 100, note="Volume-based email delivery"))
+    if "AI_INTEGRATION" in features or any(word in text for word in (" ai ", "artificial intelligence", "chatbot", "llm")):
+        items.append(InfrastructureCost("AI model usage", 50, 600, note="Varies with users, tokens, and model"))
+    if project_type in ("MOBILE_APP", "CROSS_PLATFORM_ECOSYSTEM"):
+        items.append(InfrastructureCost("Apple Developer Program", 0, 0, 99, 99, "Annual publisher membership"))
+        items.append(InfrastructureCost("Google Play registration", 0, 0, 25, 25, "One-time registration shown in year one"))
+    if "PAYMENTS" in features or any(word in text for word in ("payment", "checkout", "subscription")):
+        items.append(InfrastructureCost("Payment processing", 0, 0, note="Transaction percentage and fixed fees vary by provider"))
+    return items
+
+
+def infrastructure_totals(items: list[InfrastructureCost]) -> tuple[float, float, float, float]:
+    monthly_min = sum(item.monthly_min for item in items)
+    monthly_max = sum(item.monthly_max for item in items)
+    annual_min = sum(item.annual_min for item in items)
+    annual_max = sum(item.annual_max for item in items)
+    return monthly_min, monthly_max, annual_min + monthly_min * 12, annual_max + monthly_max * 12

@@ -36,11 +36,8 @@ class Estimate(Base):
 
     scope_configuration: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
-    # Free-text "tell us exactly what you want" field. The toggle-based
-    # scope_configuration drives the calculated price; this is read by a
-    # human on the GG HighTech side (surfaced in the admin Leads list, the
-    # PDF, and the lead-notification email) to sanity-check that price
-    # against what the client actually described before following up.
+    # Required for new estimates and used by scope analysis. Nullable remains
+    # for historical rows created before descriptions became mandatory.
     project_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     calculated_min_price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)

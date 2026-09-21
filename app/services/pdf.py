@@ -31,6 +31,12 @@ def build_estimate_pdf(
     project_description: Optional[str] = None,
     client_email: Optional[str] = None,
     client_phone: Optional[str] = None,
+    analysis: Optional[dict] = None,
+    infrastructure: Optional[list[dict]] = None,
+    monthly_operating_min: float = 0,
+    monthly_operating_max: float = 0,
+    first_year_operating_min: float = 0,
+    first_year_operating_max: float = 0,
 ) -> bytes:
     pdf = FPDF(format="Letter")
     pdf.add_page()
@@ -65,6 +71,30 @@ def build_estimate_pdf(
     pdf.cell(0, 7, f"Budget range: ${price_min:,.0f} - ${price_max:,.0f}", ln=True)
     pdf.cell(0, 7, f"Timeline: {weeks_min} - {weeks_max} weeks", ln=True)
     pdf.ln(10)
+
+    if infrastructure:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, "Estimated Operating Costs", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        for item in infrastructure:
+            monthly = f"${item['monthly_min']:,.0f}-${item['monthly_max']:,.0f}/mo" if item["monthly_max"] else ""
+            annual = f"${item['annual_min']:,.0f}-${item['annual_max']:,.0f}/yr" if item["annual_max"] else ""
+            separator = " + " if monthly and annual else ""
+            pdf.cell(0, 6, _latin1_safe(f"{item['name']}: {monthly}{separator}{annual}"), ln=True)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 7, f"Monthly total: ${monthly_operating_min:,.0f}-${monthly_operating_max:,.0f}", ln=True)
+        pdf.cell(0, 7, f"Estimated first year: ${first_year_operating_min:,.0f}-${first_year_operating_max:,.0f}", ln=True)
+        pdf.ln(6)
+
+    if analysis:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 8, "Scope Analysis", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 6, _latin1_safe(analysis.get("summary", "")))
+        pdf.cell(0, 6, f"Complexity: {analysis.get('complexity', 'standard').title()}", ln=True)
+        pdf.cell(0, 6, f"Scope adjustment: {analysis.get('adjustment_percent', 0)}%", ln=True)
+        pdf.multi_cell(0, 6, _latin1_safe(analysis.get("market_comparison", "")))
+        pdf.ln(6)
 
     if client_email or client_phone:
         pdf.set_font("Helvetica", "B", 13)

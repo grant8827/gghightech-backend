@@ -6,22 +6,29 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.estimate import Estimate
-from app.schemas.estimate import EstimateCreate, EstimateOut, EstimatePreview
+from app.schemas.estimate import EstimateCreate, EstimateOptions, EstimateOut, EstimatePreview
 from app.services.audit import record_audit_event
 from app.services.auth import require_roles
 from app.services.email import send_lead_notification
 from app.services.pdf import build_estimate_pdf
-from app.services.pricing import InvalidScopeError, calculate_estimate
+from app.services.pricing import (
+    InvalidScopeError,
+    apply_scope_adjustment,
+    calculate_estimate,
+    calculate_infrastructure,
+    infrastructure_totals,
+)
+from app.services.scope_analysis import analyze_scope
 
 router = APIRouter(prefix="/api/v1/estimates", tags=["estimates"])
 
-# Staff review the free-text description against the toggle-based price —
-# same roles that can manage projects/organizations.
+# Staff can review the description, scope analysis, and operating-cost
+# assumptions alongside the computed price.
 _STAFF_ROLES = ("SUPER_ADMIN", "PROJECT_MANAGER", "LEAD_ENGINEER")
 
 
 @router.post("/preview", response_model=EstimatePreview)
-def preview_estimate(payload: EstimateCreate) -> EstimatePreview:
+def preview_estimate(payload: EstimateOptions) -> EstimatePreview:
     """Stateless calculation for live UI updates as the user toggles scope
     options (GGH-201) — no DB write, so it's safe to call on every change
     without spamming the estimates table with draft rows. Persisting happens
@@ -31,20 +38,47 @@ def preview_estimate(payload: EstimateCreate) -> EstimatePreview:
     except InvalidScopeError as exc:
         raise HTTPException(422, str(exc)) from exc
 
+    infrastructure = calculate_infrastructure(payload.project_type, payload.features)
+    monthly_min, monthly_max, first_year_min, first_year_max = infrastructure_totals(infrastructure)
     return EstimatePreview(
         calculated_min_price=result.price_min,
         calculated_max_price=result.price_max,
         estimated_weeks_min=result.weeks_min,
         estimated_weeks_max=result.weeks_max,
+        infrastructure=[item.__dict__ for item in infrastructure],
+        monthly_operating_min=monthly_min,
+        monthly_operating_max=monthly_max,
+        first_year_operating_min=first_year_min,
+        first_year_operating_max=first_year_max,
     )
 
 
 @router.post("", response_model=EstimateOut, status_code=201)
 def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> Estimate:
     try:
-        result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
+        base_result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
     except InvalidScopeError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+    analysis = analyze_scope(
+        payload.project_description, payload.project_type, payload.features, payload.design_tier
+    )
+    result = apply_scope_adjustment(base_result, analysis.adjustment_percent)
+    infrastructure = calculate_infrastructure(
+        payload.project_type, payload.features, payload.project_description
+    )
+    monthly_min, monthly_max, first_year_min, first_year_max = infrastructure_totals(infrastructure)
+    infrastructure_data = [
+        {
+            "name": item.name,
+            "monthly_min": item.monthly_min,
+            "monthly_max": item.monthly_max,
+            "annual_min": item.annual_min,
+            "annual_max": item.annual_max,
+            "note": item.note,
+        }
+        for item in infrastructure
+    ]
 
     estimate = Estimate(
         client_email=payload.client_email,
@@ -53,6 +87,12 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
             "project_type": payload.project_type,
             "features": payload.features,
             "design_tier": payload.design_tier,
+            "analysis": analysis.as_dict(),
+            "infrastructure": infrastructure_data,
+            "monthly_operating_min": monthly_min,
+            "monthly_operating_max": monthly_max,
+            "first_year_operating_min": first_year_min,
+            "first_year_operating_max": first_year_max,
         },
         project_description=payload.project_description,
         calculated_min_price=result.price_min,
@@ -91,9 +131,7 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
 
 @router.get("", response_model=list[EstimateOut], dependencies=[Depends(require_roles(*_STAFF_ROLES))])
 def list_estimates(db: Session = Depends(get_db)) -> list[Estimate]:
-    """Leads list for staff (GGH-202) — lets someone actually read the
-    free-text project_description and sanity-check it against the
-    toggle-based price before following up."""
+    """Estimate leads with the original brief and generated scope analysis."""
     return db.query(Estimate).order_by(Estimate.created_at.desc()).all()
 
 
@@ -122,6 +160,12 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
         weeks_min=estimate.estimated_weeks_min,
         weeks_max=estimate.estimated_weeks_max,
         project_description=estimate.project_description,
+        analysis=scope.get("analysis"),
+        infrastructure=scope.get("infrastructure", []),
+        monthly_operating_min=scope.get("monthly_operating_min", 0),
+        monthly_operating_max=scope.get("monthly_operating_max", 0),
+        first_year_operating_min=scope.get("first_year_operating_min", 0),
+        first_year_operating_max=scope.get("first_year_operating_max", 0),
         client_email=estimate.client_email,
         client_phone=estimate.client_phone,
     )

@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     # Fill in once a Stripe account exists.
     STRIPE_SECRET_KEY: str = ""
 
+    # Optional AI-assisted estimate analysis. When blank, the estimator uses
+    # the deterministic scope heuristics in app/services/scope_analysis.py.
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-5-mini"
+
     # GitHub sync (app/services/github_service.py). Optional — reads work
     # unauthenticated against public repos (rate-limited by IP). Set this
     # for private repos or a higher rate limit: a fine-grained PAT with
