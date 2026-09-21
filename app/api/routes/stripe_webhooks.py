@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.invoice import Invoice
+from app.models.subscription_plan import SubscriptionPlan
 
 router = APIRouter(prefix="/api/v1/stripe", tags=["stripe"])
 logger = logging.getLogger("gghightech.stripe_webhooks")
@@ -72,6 +73,28 @@ def _mark_invoice_paid(db: Session, session: dict) -> None:
     db.commit()
 
 
+def _sync_subscription(db: Session, stripe_object: dict, event_type: str) -> None:
+    metadata = stripe_object.get("metadata") or {}
+    raw_plan_id = metadata.get("plan_id")
+    if not raw_plan_id:
+        return
+    try:
+        plan_id = uuid.UUID(raw_plan_id)
+    except ValueError:
+        logger.warning("Stripe event contains invalid plan_id metadata: %s", raw_plan_id)
+        return
+    plan = db.get(SubscriptionPlan, plan_id)
+    if not plan:
+        return
+    if event_type == "customer.subscription.deleted":
+        plan.status = "CANCELED"
+    elif stripe_object.get("status") in ("past_due", "unpaid", "paused"):
+        plan.status = "PAUSED"
+    else:
+        plan.status = "ACTIVE"
+    db.commit()
+
+
 @router.post("/webhook")
 async def stripe_webhook(
     request: Request,
@@ -94,12 +117,15 @@ async def stripe_webhook(
     data_object = (event.get("data") or {}).get("object") or {}
     if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
         _mark_invoice_paid(db, data_object)
+        if data_object.get("mode") == "subscription":
+            _sync_subscription(db, data_object, event_type)
     elif event_type in (
         "invoice.paid",
         "invoice.payment_failed",
         "customer.subscription.updated",
         "customer.subscription.deleted",
     ):
+        _sync_subscription(db, data_object, event_type)
         logger.info("Stripe subscription event received: %s (%s)", event_type, event.get("id"))
     else:
         logger.info("Unhandled Stripe event received: %s", event_type)

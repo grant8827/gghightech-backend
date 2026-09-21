@@ -14,6 +14,10 @@ from app.schemas.invoice import InvoiceOut
 from app.schemas.subscription_plan import SubscriptionPlanCreate, SubscriptionPlanOut, SubscriptionPlanUpdate
 from app.services.audit import record_audit_event
 from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, require_roles
+from app.services.stripe_service import (
+    StripeIntegrationError,
+    create_subscription_checkout_session,
+)
 
 router = APIRouter(prefix="/api/v1/subscriptions", tags=["subscriptions"])
 
@@ -133,3 +137,22 @@ def generate_subscription_invoice(
     )
     commit_with_rls_refresh(db, invoice, None)
     return invoice
+
+
+@router.post("/{plan_id}/checkout")
+def create_subscription_checkout(
+    plan_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles(*_STAFF_ROLES)),
+) -> dict:
+    """Create a shareable Stripe-hosted enrollment link for a monthly plan."""
+    plan = db.get(SubscriptionPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, "Subscription plan not found")
+    if plan.status == "CANCELED":
+        raise HTTPException(409, "Canceled plans cannot start Stripe Checkout")
+    try:
+        checkout_url = create_subscription_checkout_session(plan.id, float(plan.amount), plan.name)
+    except StripeIntegrationError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"checkout_url": checkout_url}

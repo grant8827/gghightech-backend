@@ -21,7 +21,7 @@ from app.services.auth import (
     require_roles,
 )
 from app.services.pdf import build_invoice_pdf
-from app.services.stripe_service import create_checkout_session
+from app.services.stripe_service import StripeIntegrationError, create_checkout_session
 
 router = APIRouter(prefix="/api/v1/invoices", tags=["invoices"])
 
@@ -119,9 +119,7 @@ async def pay_invoice(
     user: AuthenticatedUser = Depends(get_current_user),
     caller_org_id: Optional[uuid.UUID] = Depends(get_current_user_org_id),
 ) -> dict:
-    """CLIENT_ADMIN-gated like approve_milestone. Stripe stays stubbed
-    (app/services/stripe_service.py) until a real account exists — this
-    responds 503 rather than ever pretending a payment happened."""
+    """Create a Stripe-hosted Checkout Session for a pending invoice."""
     if user.role != "CLIENT_ADMIN":
         raise HTTPException(403, "Only a CLIENT_ADMIN can pay invoices")
 
@@ -129,13 +127,16 @@ async def pay_invoice(
     if invoice.status == "PAID":
         raise HTTPException(409, "This invoice is already paid")
 
-    session = create_checkout_session(invoice.id, float(invoice.amount))
-    if session is None:
-        raise HTTPException(
-            503,
-            "Online payment isn't set up yet — contact GG HighTech for other payment instructions.",
+    try:
+        checkout_url = create_checkout_session(
+            invoice.id,
+            float(invoice.amount),
+            customer_email=user.email,
+            description=invoice.description,
         )
-    return {"checkout_url": session}  # pragma: no cover — unreachable until Stripe is wired up
+    except StripeIntegrationError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"checkout_url": checkout_url}
 
 
 @router.patch("/{invoice_id}/mark-paid", response_model=InvoiceOut)

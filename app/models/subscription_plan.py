@@ -1,13 +1,7 @@
-"""Recurring billing plans (Payments & Subscriptions admin tab). This is
-deliberately not real recurring billing — there's no scheduler and no
-Stripe account with recurring Prices behind it. It's a record of "what
-this client owes monthly and on what day," plus a manual
-POST /subscriptions/{id}/generate-invoice that creates one real Invoice
-on demand — the same honest stopping point as the existing Stripe-stubbed
-Pay button (app/services/stripe_service.py).
+"""Recurring billing plans used to create Stripe-hosted monthly Checkout
+links. Manual invoice generation remains available for non-card billing.
 
-Deliberately not RLS-protected, same reasoning as JiraTicket: staff-only,
-never read by the client portal in this scope."""
+Deliberately not RLS-protected, same reasoning as JiraTicket: staff-only."""
 
 import uuid
 from datetime import datetime

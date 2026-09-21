@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Fill in once a Stripe account exists.
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_SUCCESS_URL: str = "http://localhost:3000/portal?payment=success"
+    STRIPE_CANCEL_URL: str = "http://localhost:3000/portal?payment=cancelled"
+    STRIPE_PORTAL_RETURN_URL: str = "http://localhost:3000/portal"
 
     # Optional AI-assisted estimate analysis. When blank, the estimator uses
     # the deterministic scope heuristics in app/services/scope_analysis.py.

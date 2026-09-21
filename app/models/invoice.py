@@ -1,9 +1,8 @@
 """Created either by POST /milestones/{id}/approve (milestone_id set) or
 directly by staff via POST /invoices (milestone_id null, description set —
 for retainers, one-off charges, anything not tied to a milestone reaching
-100%). Stripe stays stubbed (app/services/stripe_service.py) until a real
-account exists; PATCH /invoices/{id}/mark-paid covers real-world payments
-(check, wire) made outside Stripe in the meantime."""
+100%). Stripe Checkout handles online card payments; PATCH
+/invoices/{id}/mark-paid covers checks and wires made outside Stripe."""
 
 from typing import Optional
 
