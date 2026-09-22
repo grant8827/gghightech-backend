@@ -68,7 +68,16 @@ def create_checkout_session(
     return checkout_url
 
 
-def create_subscription_checkout_session(plan_id: uuid.UUID, amount: float, name: str) -> str:
+def create_subscription_checkout_session(
+    plan_id: uuid.UUID,
+    amount: float,
+    name: str,
+    interval: str = "month",
+    customer_email: Optional[str] = None,
+) -> str:
+    """interval is Stripe's recurring-interval string — "month" for a
+    Monthly plan a client opted to auto-renew, "year" for an Annual plan
+    (always recurring, see SubscriptionPlan's docstring)."""
     data = {
         "mode": "subscription",
         "success_url": settings.STRIPE_SUCCESS_URL,
@@ -78,10 +87,12 @@ def create_subscription_checkout_session(plan_id: uuid.UUID, amount: float, name
         "subscription_data[metadata][plan_id]": str(plan_id),
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(round(amount * 100)),
-        "line_items[0][price_data][recurring][interval]": "month",
+        "line_items[0][price_data][recurring][interval]": interval,
         "line_items[0][price_data][product_data][name]": name,
         "line_items[0][quantity]": "1",
     }
+    if customer_email:
+        data["customer_email"] = customer_email
     session = _post("/checkout/sessions", data)
     checkout_url = session.get("url")
     if not checkout_url:

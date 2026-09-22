@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class InvoiceOut(BaseModel):
@@ -13,6 +13,7 @@ class InvoiceOut(BaseModel):
     description: Optional[str]
     amount: float
     status: str
+    customer_email: Optional[str]
     created_at: datetime
     paid_at: Optional[datetime]
 
@@ -28,3 +29,4 @@ class InvoiceCreate(BaseModel):
     project_id: uuid.UUID
     amount: float = Field(..., gt=0)
     description: str = Field(..., min_length=1, max_length=500)
+    customer_email: Optional[EmailStr] = None

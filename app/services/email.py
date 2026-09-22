@@ -45,3 +45,17 @@ def send_invite_email(email: str, full_name: str, invite_link: str) -> bool:
 
     logger.info("STUB EMAIL — would invite %s (%s) to set a password: %s", full_name, email, invite_link)
     return False
+
+
+def send_payment_link_email(customer_email: str, checkout_url: str, description: str) -> bool:
+    """Sent when staff create a Stripe Checkout link for a one-time invoice
+    (app/api/routes/invoices.py) or a subscription plan
+    (app/api/routes/subscriptions.py). Returns whether a real send happened
+    (always False until RESEND_API_KEY is set) — in dev, the link is only
+    visible in this log line, same as the two stubs above."""
+
+    if settings.RESEND_API_KEY:
+        raise NotImplementedError("RESEND_API_KEY is set but the Resend integration isn't wired up yet")
+
+    logger.info("STUB EMAIL — would send %s a payment link for %s: %s", customer_email, description, checkout_url)
+    return False

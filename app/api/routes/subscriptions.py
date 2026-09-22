@@ -1,5 +1,6 @@
 from typing import Optional
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -14,10 +15,14 @@ from app.schemas.invoice import InvoiceOut
 from app.schemas.subscription_plan import SubscriptionPlanCreate, SubscriptionPlanOut, SubscriptionPlanUpdate
 from app.services.audit import record_audit_event
 from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, require_roles
+from app.services.email import send_payment_link_email
 from app.services.stripe_service import (
     StripeIntegrationError,
+    create_checkout_session,
     create_subscription_checkout_session,
 )
+
+logger = logging.getLogger("gghightech.billing")
 
 router = APIRouter(prefix="/api/v1/subscriptions", tags=["subscriptions"])
 
@@ -122,6 +127,10 @@ def generate_subscription_invoice(
         description=f"{plan.name} — {now:%B %Y}",
         amount=plan.amount,
         status="PENDING",
+        # Persisted on the invoice itself (not just used for the
+        # best-effort auto-send below) so a failed send can be retried via
+        # POST /invoices/{id}/send-payment-link without re-entering it.
+        customer_email=plan.customer_email,
     )
     db.add(invoice)
     db.flush()
@@ -136,6 +145,21 @@ def generate_subscription_invoice(
         metadata={"plan_id": str(plan.id), "amount": float(plan.amount)},
     )
     commit_with_rls_refresh(db, invoice, None)
+
+    # Best-effort: a manual (is_subscription=False) plan has no auto-renewal,
+    # so this is the only place that invoice's payment link would ever get
+    # sent. Never let a Stripe/email hiccup undo the invoice that was just
+    # committed above — staff can always retry via
+    # POST /invoices/{id}/send-payment-link.
+    if plan.customer_email:
+        try:
+            checkout_url = create_checkout_session(
+                invoice.id, float(invoice.amount), customer_email=plan.customer_email, description=invoice.description
+            )
+            send_payment_link_email(plan.customer_email, checkout_url, invoice.description or plan.name)
+        except StripeIntegrationError:
+            logger.warning("Could not send payment link for generated invoice %s", invoice.id, exc_info=True)
+
     return invoice
 
 
@@ -145,14 +169,20 @@ def create_subscription_checkout(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles(*_STAFF_ROLES)),
 ) -> dict:
-    """Create a shareable Stripe-hosted enrollment link for a monthly plan."""
+    """Create a shareable Stripe-hosted enrollment link for a recurring
+    (is_subscription=True) plan and email it to the stored customer_email."""
     plan = db.get(SubscriptionPlan, plan_id)
     if not plan:
         raise HTTPException(404, "Subscription plan not found")
     if plan.status == "CANCELED":
         raise HTTPException(409, "Canceled plans cannot start Stripe Checkout")
+    interval = "year" if plan.billing_frequency == "ANNUAL" else "month"
     try:
-        checkout_url = create_subscription_checkout_session(plan.id, float(plan.amount), plan.name)
+        checkout_url = create_subscription_checkout_session(
+            plan.id, float(plan.amount), plan.name, interval=interval, customer_email=plan.customer_email
+        )
     except StripeIntegrationError as exc:
         raise HTTPException(502, str(exc)) from exc
+    if plan.customer_email:
+        send_payment_link_email(plan.customer_email, checkout_url, plan.name)
     return {"checkout_url": checkout_url}

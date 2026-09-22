@@ -34,5 +34,8 @@ class Invoice(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    # Who POST /invoices/{id}/send-payment-link emailed the Stripe Checkout
+    # link to — audit trail, and lets a resend reuse it without re-asking.
+    customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

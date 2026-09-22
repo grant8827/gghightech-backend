@@ -20,6 +20,7 @@ from app.services.auth import (
     get_current_user_org_id,
     require_roles,
 )
+from app.services.email import send_payment_link_email
 from app.services.pdf import build_invoice_pdf
 from app.services.stripe_service import StripeIntegrationError, create_checkout_session
 
@@ -62,6 +63,7 @@ def create_invoice(
         description=payload.description,
         amount=payload.amount,
         status="PENDING",
+        customer_email=payload.customer_email,
     )
     db.add(invoice)
     db.flush()  # assigns invoice.id so the audit row below can reference it
@@ -76,6 +78,37 @@ def create_invoice(
     )
     commit_with_rls_refresh(db, invoice, None)
     return invoice
+
+
+@router.post("/{invoice_id}/send-payment-link")
+def send_invoice_payment_link(
+    invoice_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles(*_STAFF_ROLES)),
+) -> dict:
+    """One-time payment path — this Invoice was never a SubscriptionPlan
+    (see that model's docstring: one-time charges never create one).
+    Creates a one-time Stripe Checkout session and emails it to
+    invoice.customer_email; also callable again later to resend."""
+    invoice = db.get(Invoice, invoice_id)
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    if invoice.status == "PAID":
+        raise HTTPException(409, "This invoice is already paid")
+    if not invoice.customer_email:
+        raise HTTPException(422, "This invoice has no customer_email to send a link to")
+
+    try:
+        checkout_url = create_checkout_session(
+            invoice.id,
+            float(invoice.amount),
+            customer_email=invoice.customer_email,
+            description=invoice.description,
+        )
+    except StripeIntegrationError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    send_payment_link_email(invoice.customer_email, checkout_url, invoice.description or "GG HighTech invoice")
+    return {"checkout_url": checkout_url}
 
 
 def _get_scoped_invoice(db: Session, invoice_id: uuid.UUID, caller_org_id: Optional[uuid.UUID]) -> Invoice:
