@@ -19,6 +19,14 @@ class ScopeAnalysis:
     detected_requirements: list[str]
     risks: list[str]
     market_comparison: str
+    recommended_price_min: int
+    recommended_price_max: int
+    recommended_weeks_min: int
+    recommended_weeks_max: int
+    recommended_monthly_min: int
+    recommended_monthly_max: int
+    recommended_hours_per_week_min: int
+    recommended_hours_per_week_max: int
     source: str
 
     def as_dict(self) -> dict:
@@ -61,11 +69,25 @@ def _heuristic_analysis(description: str, selected_features: list[str]) -> Scope
         detected_requirements=detected,
         risks=risks,
         market_comparison="Positioned within typical custom-software agency ranges for the detected scope; final vendor and usage costs are confirmed during discovery.",
+        recommended_price_min=0,
+        recommended_price_max=0,
+        recommended_weeks_min=0,
+        recommended_weeks_max=0,
+        recommended_monthly_min=0,
+        recommended_monthly_max=0,
+        recommended_hours_per_week_min=0,
+        recommended_hours_per_week_max=0,
         source="rules",
     )
 
 
-def analyze_scope(description: str, project_type: str, selected_features: list[str], design_tier: str) -> ScopeAnalysis:
+def analyze_scope(
+    description: str,
+    request_type: str,
+    project_type: str,
+    selected_features: list[str],
+    design_tier: str,
+) -> ScopeAnalysis:
     fallback = _heuristic_analysis(description, selected_features)
     if not settings.OPENAI_API_KEY:
         return fallback
@@ -79,19 +101,30 @@ def analyze_scope(description: str, project_type: str, selected_features: list[s
             "detected_requirements": {"type": "array", "items": {"type": "string"}},
             "risks": {"type": "array", "items": {"type": "string"}},
             "market_comparison": {"type": "string"},
+            "recommended_price_min": {"type": "integer", "minimum": 0, "maximum": 250000},
+            "recommended_price_max": {"type": "integer", "minimum": 0, "maximum": 250000},
+            "recommended_weeks_min": {"type": "integer", "minimum": 0, "maximum": 104},
+            "recommended_weeks_max": {"type": "integer", "minimum": 0, "maximum": 104},
+            "recommended_monthly_min": {"type": "integer", "minimum": 0, "maximum": 50000},
+            "recommended_monthly_max": {"type": "integer", "minimum": 0, "maximum": 50000},
+            "recommended_hours_per_week_min": {"type": "integer", "minimum": 0, "maximum": 80},
+            "recommended_hours_per_week_max": {"type": "integer", "minimum": 0, "maximum": 80},
         },
-        "required": ["summary", "complexity", "adjustment_percent", "detected_requirements", "risks", "market_comparison"],
+        "required": ["summary", "complexity", "adjustment_percent", "detected_requirements", "risks", "market_comparison", "recommended_price_min", "recommended_price_max", "recommended_weeks_min", "recommended_weeks_max", "recommended_monthly_min", "recommended_monthly_max", "recommended_hours_per_week_min", "recommended_hours_per_week_max"],
         "additionalProperties": False,
     }
     prompt = f"""Evaluate this software project for a preliminary agency estimate.
+Request type: {request_type}
 Project type: {project_type}
 Selected features: {selected_features}
 Design tier: {design_tier}
 Customer description: {description}
 
-Identify requirements the toggles miss. Compare complexity with typical custom-software market work.
-Use adjustment_percent only for extra development complexity beyond the selected options, from 0 to 35.
-Do not include recurring hosting, domain, email, storage, app-store, or AI usage fees in that percentage."""
+Identify requirements the toggles miss and price the complete described scope against typical US custom-software agency work. Account for discovery, design, engineering, testing, project management, deployment, and contingency.
+For NEW or UPDATE, provide a realistic non-binding one-time budget in recommended_price_min/max and delivery time in recommended_weeks_min/max; set all recommended monthly maintenance fields to 0.
+For MAINTENANCE, set one-time price and delivery fields to 0 and provide recommended_monthly_min/max plus recommended_hours_per_week_min/max.
+Keep the maximum above the minimum. Do not put domain, hosting, email, storage, app-store, payment-processing, or AI usage charges inside the development price; those are calculated separately.
+adjustment_percent is explanatory only and must be from 0 to 35."""
     try:
         response = httpx.post(
             "https://api.openai.com/v1/responses",
@@ -119,6 +152,26 @@ Do not include recurring hosting, domain, email, storage, app-store, or AI usage
             if content.get("type") == "output_text"
         )
         data = json.loads(output_text)
+        if request_type == "MAINTENANCE":
+            data["recommended_price_min"] = data["recommended_price_max"] = 0
+            data["recommended_weeks_min"] = data["recommended_weeks_max"] = 0
+            if data["recommended_monthly_max"] < data["recommended_monthly_min"]:
+                data["recommended_monthly_min"], data["recommended_monthly_max"] = data["recommended_monthly_max"], data["recommended_monthly_min"]
+            if data["recommended_hours_per_week_max"] < data["recommended_hours_per_week_min"]:
+                data["recommended_hours_per_week_min"], data["recommended_hours_per_week_max"] = data["recommended_hours_per_week_max"], data["recommended_hours_per_week_min"]
+            if data["recommended_monthly_min"] <= 0 or data["recommended_hours_per_week_min"] <= 0:
+                raise ValueError("AI returned an invalid maintenance estimate")
+        else:
+            data["recommended_monthly_min"] = data["recommended_monthly_max"] = 0
+            data["recommended_hours_per_week_min"] = data["recommended_hours_per_week_max"] = 0
+            if data["recommended_price_max"] < data["recommended_price_min"]:
+                data["recommended_price_min"], data["recommended_price_max"] = data["recommended_price_max"], data["recommended_price_min"]
+            if data["recommended_weeks_max"] < data["recommended_weeks_min"]:
+                data["recommended_weeks_min"], data["recommended_weeks_max"] = data["recommended_weeks_max"], data["recommended_weeks_min"]
+            data["recommended_price_min"] = round(data["recommended_price_min"] / 100) * 100
+            data["recommended_price_max"] = round(data["recommended_price_max"] / 100) * 100
+            if data["recommended_price_min"] <= 0 or data["recommended_weeks_min"] <= 0:
+                raise ValueError("AI returned an invalid project estimate")
         return ScopeAnalysis(**data, source="openai")
     except Exception:
         logger.exception("AI scope analysis failed; using deterministic fallback")

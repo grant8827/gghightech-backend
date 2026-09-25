@@ -88,7 +88,11 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
     # maintenance inquiry — but its price/timeline adjustment_percent is
     # only ever applied below for NEW/UPDATE, never MAINTENANCE.
     analysis = analyze_scope(
-        payload.project_description, payload.project_type, payload.features, payload.design_tier
+        payload.project_description,
+        payload.request_type,
+        payload.project_type,
+        payload.features,
+        payload.design_tier,
     )
 
     scope_extra: dict = {}
@@ -100,19 +104,25 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
             infrastructure_data: list[dict] = []
             monthly_min = monthly_max = first_year_min = first_year_max = 0.0
             scope_extra = {
-                "maintenance_monthly_min": plan.monthly_min,
-                "maintenance_monthly_max": plan.monthly_max,
-                "maintenance_hours_per_week_min": plan.hours_per_week_min,
-                "maintenance_hours_per_week_max": plan.hours_per_week_max,
+                "maintenance_monthly_min": analysis.recommended_monthly_min if analysis.source == "openai" else plan.monthly_min,
+                "maintenance_monthly_max": analysis.recommended_monthly_max if analysis.source == "openai" else plan.monthly_max,
+                "maintenance_hours_per_week_min": analysis.recommended_hours_per_week_min if analysis.source == "openai" else plan.hours_per_week_min,
+                "maintenance_hours_per_week_max": analysis.recommended_hours_per_week_max if analysis.source == "openai" else plan.hours_per_week_max,
             }
         else:
             if payload.request_type == "UPDATE":
                 base_result = calculate_update_estimate(payload.features, payload.design_tier)
             else:
                 base_result = calculate_estimate(payload.project_type, payload.features, payload.design_tier)
-            result = apply_scope_adjustment(base_result, analysis.adjustment_percent)
-            result_min_price, result_max_price = result.price_min, result.price_max
-            result_weeks_min, result_weeks_max = result.weeks_min, result.weeks_max
+            if analysis.source == "openai":
+                result_min_price = analysis.recommended_price_min
+                result_max_price = analysis.recommended_price_max
+                result_weeks_min = analysis.recommended_weeks_min
+                result_weeks_max = analysis.recommended_weeks_max
+            else:
+                result = apply_scope_adjustment(base_result, analysis.adjustment_percent)
+                result_min_price, result_max_price = result.price_min, result.price_max
+                result_weeks_min, result_weeks_max = result.weeks_min, result.weeks_max
 
             infrastructure = calculate_infrastructure(
                 payload.project_type, payload.features, payload.project_description
