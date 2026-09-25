@@ -103,7 +103,11 @@ Do not include recurring hosting, domain, email, storage, app-store, or AI usage
                 "store": False,
                 "text": {"format": {"type": "json_schema", "name": "scope_analysis", "strict": True, "schema": schema}},
             },
-            timeout=20,
+            # Structured responses from reasoning models can occasionally take
+            # longer than 20 seconds, especially on the first request after an
+            # idle period. Keep the deterministic fallback, but allow enough
+            # time for the AI result to complete under normal production load.
+            timeout=60,
         )
         response.raise_for_status()
         body = response.json()
