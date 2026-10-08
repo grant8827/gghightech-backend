@@ -13,6 +13,7 @@ from app.api.routes import (
     milestones,
     organizations,
     projects,
+    reviews,
     subscriptions,
     stripe_webhooks,
     updates,
@@ -47,5 +48,6 @@ app.include_router(invoices.router)
 app.include_router(updates.router)
 app.include_router(jira_tickets.router)
 app.include_router(subscriptions.router)
+app.include_router(reviews.router)
 app.include_router(stripe_webhooks.router)
 app.include_router(ws.router)

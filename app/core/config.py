@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     AI_ANALYSIS_DAILY_CAP: int = Field(default=200, ge=0)
     AI_ANALYSIS_MAX_CONCURRENT: int = Field(default=4, ge=0)
 
+    # Public client reviews (app/api/routes/reviews.py). Reviews need no
+    # email verification. True: a new review is public immediately and
+    # staff moderate afterwards. False: it waits as PENDING until staff
+    # publish it from the admin Reviews tab.
+    REVIEWS_AUTO_PUBLISH: bool = True
+    # Submissions per IP address. 0 disables a limit.
+    REVIEW_SUBMIT_LIMIT_PER_HOUR: int = Field(default=3, ge=0)
+    REVIEW_SUBMIT_LIMIT_PER_DAY: int = Field(default=10, ge=0)
+
     # Brute-force protection for POST /auth/login (app/api/routes/auth.py).
     # 0 disables a limit. Attempts per IP address, successful or not:
     LOGIN_ATTEMPTS_PER_IP_PER_5_MIN: int = Field(default=20, ge=0)

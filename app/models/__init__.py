@@ -12,6 +12,7 @@ from app.models.milestone import Milestone
 from app.models.organization import Organization
 from app.models.project import Project
 from app.models.project_update import ProjectUpdate
+from app.models.review import Review
 from app.models.subscription_plan import SubscriptionPlan
 from app.models.user import User
 
@@ -26,4 +27,5 @@ __all__ = [
     "ProjectUpdate",
     "JiraTicket",
     "SubscriptionPlan",
+    "Review",
 ]
