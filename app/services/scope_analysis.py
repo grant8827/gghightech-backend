@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 import httpx
 
 from app.core.config import settings
+from app.services.ai_budget import ai_budget
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,12 @@ For NEW or UPDATE, provide a realistic non-binding one-time budget in recommende
 For MAINTENANCE, set one-time price and delivery fields to 0 and provide recommended_monthly_min/max plus recommended_hours_per_week_min/max.
 Keep the maximum above the minimum. Do not put domain, hosting, email, storage, app-store, payment-processing, or AI usage charges inside the development price; those are calculated separately.
 adjustment_percent is explanatory only and must be from 0 to 35."""
+    # This runs for anonymous visitors, so the paid call is rationed
+    # globally — see app/services/ai_budget.py. Over budget is not an
+    # error: the visitor gets the rules-based estimate instead.
+    if not ai_budget.try_acquire():
+        logger.warning("AI analysis budget reached (daily cap or concurrency); using deterministic fallback")
+        return fallback
     try:
         response = httpx.post(
             "https://api.openai.com/v1/responses",
@@ -176,3 +183,5 @@ adjustment_percent is explanatory only and must be from 0 to 35."""
     except Exception:
         logger.exception("AI scope analysis failed; using deterministic fallback")
         return fallback
+    finally:
+        ai_budget.release()

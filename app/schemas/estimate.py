@@ -103,3 +103,12 @@ class EstimateOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class EstimateCreated(EstimateOut):
+    """Response to the public POST /estimates only. pdf_token lets the
+    submitter download their own PDF (send it as the X-Estimate-Token
+    header to GET /estimates/{id}/pdf); null when the server has no
+    SECRET_KEY to sign one with (development only)."""
+
+    pdf_token: Optional[str] = None

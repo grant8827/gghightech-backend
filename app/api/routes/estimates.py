@@ -1,15 +1,19 @@
 import uuid
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import jwt
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.estimate import Estimate
-from app.schemas.estimate import EstimateCreate, EstimateOptions, EstimateOut, EstimatePreview
+from app.schemas.estimate import EstimateCreate, EstimateCreated, EstimateOptions, EstimateOut, EstimatePreview
 from app.services.audit import record_audit_event
-from app.services.auth import require_roles
+from app.services.auth import get_current_user, require_roles
 from app.services.email import send_lead_notification
+from app.services.local_auth import create_estimate_pdf_token, decode_estimate_pdf_token
 from app.services.pdf import build_estimate_pdf
 from app.services.pricing import (
     InvalidScopeError,
@@ -20,6 +24,7 @@ from app.services.pricing import (
     calculate_update_estimate,
     infrastructure_totals,
 )
+from app.services.rate_limit import Rule, rate_limit
 from app.services.scope_analysis import analyze_scope
 
 router = APIRouter(prefix="/api/v1/estimates", tags=["estimates"])
@@ -29,7 +34,22 @@ router = APIRouter(prefix="/api/v1/estimates", tags=["estimates"])
 _STAFF_ROLES = ("SUPER_ADMIN", "PROJECT_MANAGER", "LEAD_ENGINEER")
 
 
-@router.post("/preview", response_model=EstimatePreview)
+def _create_rules() -> list[Rule]:
+    return [
+        (settings.ESTIMATE_CREATE_LIMIT_PER_10_MIN, 10 * 60),
+        (settings.ESTIMATE_CREATE_LIMIT_PER_DAY, 24 * 60 * 60),
+    ]
+
+
+def _preview_rules() -> list[Rule]:
+    return [(settings.ESTIMATE_PREVIEW_LIMIT_PER_MIN, 60)]
+
+
+@router.post(
+    "/preview",
+    response_model=EstimatePreview,
+    dependencies=[Depends(rate_limit("estimate-preview", _preview_rules))],
+)
 def preview_estimate(payload: EstimateOptions) -> EstimatePreview:
     """Stateless calculation for live UI updates as the user toggles scope
     options (GGH-201) — no DB write, so it's safe to call on every change
@@ -81,8 +101,15 @@ def preview_estimate(payload: EstimateOptions) -> EstimatePreview:
     )
 
 
-@router.post("", response_model=EstimateOut, status_code=201)
-def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> Estimate:
+@router.post(
+    "",
+    response_model=EstimateCreated,
+    status_code=201,
+    # Public, writes to the DB, and may trigger a paid AI call — limited
+    # per client here, and globally by app/services/ai_budget.py.
+    dependencies=[Depends(rate_limit("estimate-create", _create_rules))],
+)
+def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> EstimateCreated:
     # Still analyzed for all three request types — useful staff context
     # (complexity, detected requirements, risks) even on an update/
     # maintenance inquiry — but its price/timeline adjustment_percent is
@@ -194,7 +221,13 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
             + (f" | client says: {payload.project_description}" if payload.project_description else ""),
         )
 
-    return estimate
+    # The only way an anonymous submitter can fetch this estimate's PDF
+    # afterwards — reading an estimate is otherwise staff-only (see
+    # _authorize_estimate_pdf below).
+    response = EstimateCreated.model_validate(estimate, from_attributes=True)
+    if settings.SECRET_KEY:
+        response.pdf_token = create_estimate_pdf_token(str(estimate.id))
+    return response
 
 
 @router.get("", response_model=list[EstimateOut], dependencies=[Depends(require_roles(*_STAFF_ROLES))])
@@ -203,7 +236,7 @@ def list_estimates(db: Session = Depends(get_db)) -> list[Estimate]:
     return db.query(Estimate).order_by(Estimate.created_at.desc()).all()
 
 
-@router.get("/{estimate_id}", response_model=EstimateOut)
+@router.get("/{estimate_id}", response_model=EstimateOut, dependencies=[Depends(require_roles(*_STAFF_ROLES))])
 def get_estimate(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> Estimate:
     estimate = db.get(Estimate, estimate_id)
     if not estimate:
@@ -211,7 +244,38 @@ def get_estimate(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> Estim
     return estimate
 
 
-@router.get("/{estimate_id}/pdf")
+async def _authorize_estimate_pdf(
+    estimate_id: uuid.UUID,
+    x_estimate_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+    x_dev_user_role: Optional[str] = Header(default=None),
+    x_dev_user_email: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> None:
+    """An estimate's PDF carries the lead's contact details and brief, so
+    it is released to exactly two kinds of caller: the visitor who just
+    submitted it (the short-lived X-Estimate-Token from POST /estimates,
+    valid for that one estimate only), or signed-in staff. Runs before any
+    DB lookup, so an unauthorized caller can't tell whether an id exists.
+
+    The token is a header, not a query parameter, to keep it out of URLs,
+    browser history, and access logs."""
+    if x_estimate_token:
+        if settings.SECRET_KEY:
+            try:
+                claims = decode_estimate_pdf_token(x_estimate_token)
+            except jwt.PyJWTError:
+                claims = None
+            if claims and claims["sub"] == str(estimate_id):
+                return
+        raise HTTPException(401, "This download link is invalid or has expired")
+
+    user = await get_current_user(authorization, x_dev_user_role, x_dev_user_email, db)
+    if user.role not in _STAFF_ROLES:
+        raise HTTPException(403, f"Requires one of roles: {_STAFF_ROLES}")
+
+
+@router.get("/{estimate_id}/pdf", dependencies=[Depends(_authorize_estimate_pdf)])
 def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
     estimate = db.get(Estimate, estimate_id)
     if not estimate:
@@ -245,5 +309,8 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="gghightech-estimate-{estimate.id}.pdf"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="gghightech-estimate-{estimate.id}.pdf"',
+            "Cache-Control": "private, no-store",
+        },
     )

@@ -6,8 +6,11 @@ Auth dependency — checks two sources, in order, for who's calling:
    `python -m app.cli create-superadmin`, or any user who's been through
    POST /auth/accept-invite.
 2. DEV-MODE FALLBACK: `X-Dev-User-Role` / `X-Dev-User-Email` headers, but
-   ONLY when ENVIRONMENT=development — never available once a real
-   environment is set, so it can't leak into staging/production.
+   ONLY when ALLOW_DEV_AUTH_HEADERS=true AND ENVIRONMENT=development. Both
+   are off by default (ENVIRONMENT defaults to production), and the app
+   refuses to start with the flag set in any other environment — see
+   app/core/config.py. A request that carries a token never reaches this
+   fallback, valid or not.
 """
 
 from typing import Optional
@@ -33,17 +36,27 @@ class AuthenticatedUser:
     user_id: Optional[str] = None  # set when authenticated via local_auth
 
 
+_SESSION_ENDED = "Your session is no longer valid, please log in again"
+
+
 async def resolve_authenticated_user(
     token: Optional[str],
     x_dev_user_role: Optional[str] = None,
     x_dev_user_email: Optional[str] = None,
+    *,
+    db: Session,
 ) -> AuthenticatedUser:
     """Core token-resolution logic, factored out of get_current_user so it
     can also be called directly from the WebSocket route (app/api/routes/ws.py),
     which authenticates via a `token` query param instead of an
     Authorization header — browsers can't set custom headers on a
     `new WebSocket(...)` connection."""
-    if token and settings.SECRET_KEY:
+    # A presented token is always judged on its own merits. It is never
+    # skipped in favour of the dev headers below, whether it is invalid,
+    # expired, or unverifiable because no signing key is configured.
+    if token:
+        if not settings.SECRET_KEY:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session token")
         try:
             claims = decode_access_token(token)
         except jwt.ExpiredSignatureError as exc:
@@ -51,23 +64,48 @@ async def resolve_authenticated_user(
         except jwt.PyJWTError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session token") from exc
 
-        # An invite token (POST /auth/accept-invite) is signed with the same
-        # key but is not a session — reject it explicitly rather than
-        # relying on the KeyError a missing "role" claim would otherwise
-        # raise below.
-        if claims.get("purpose") == "invite":
+        # Invite tokens and estimate-PDF tokens (see local_auth.py) are
+        # signed with the same key but are not sessions. A session token
+        # carries no "purpose" and always has a subject and a role —
+        # anything else is rejected explicitly rather than relying on the
+        # KeyError a missing claim would otherwise raise below.
+        if claims.get("purpose") or "sub" not in claims or "role" not in claims:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session token")
 
-        return AuthenticatedUser(user_id=claims["sub"], email=claims.get("email"), role=claims["role"])
+        # A valid signature only proves we issued this token at some
+        # point. Whether it is still good is decided by the users table,
+        # on every request: the account must still exist, must still have
+        # a password, and must not have had its sessions revoked since
+        # (token_version — see app/models/user.py). The role and email
+        # come from that row, never from the token, so a role change or a
+        # deletion takes effect immediately instead of at token expiry.
+        try:
+            user_id = uuid.UUID(str(claims["sub"]))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session token") from exc
 
-    if settings.ENVIRONMENT != "development":
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Auth is not configured")
+        db_user = db.get(User, user_id)
+        if not db_user or not db_user.password_hash:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, _SESSION_ENDED)
+        # Tokens issued before token_version existed carry no "ver"; they
+        # count as version 0, which is every existing user's value, so
+        # deploying this doesn't sign anyone out.
+        if claims.get("ver", 0) != db_user.token_version:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, _SESSION_ENDED)
+
+        return AuthenticatedUser(user_id=str(db_user.id), email=db_user.email, role=db_user.role)
+
+    # Fail closed: the dev headers are ignored entirely unless header auth
+    # was explicitly opted into AND the environment is explicitly
+    # development (see Settings.dev_auth_headers_enabled). The response is
+    # the same whether or not the headers were sent.
+    if not settings.dev_auth_headers_enabled:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
     if not x_dev_user_role:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
-            "Dev auth: send X-Dev-User-Role (and optionally X-Dev-User-Email) — "
-            "SECRET_KEY is not configured yet (see .env.example).",
+            "Dev auth is enabled: send X-Dev-User-Role (and optionally X-Dev-User-Email), or a bearer token.",
         )
     return AuthenticatedUser(email=x_dev_user_email, role=x_dev_user_role)
 
@@ -76,11 +114,12 @@ async def get_current_user(
     authorization: Optional[str] = Header(default=None),
     x_dev_user_role: Optional[str] = Header(default=None),
     x_dev_user_email: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
     token = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
-    return await resolve_authenticated_user(token, x_dev_user_role, x_dev_user_email)
+    return await resolve_authenticated_user(token, x_dev_user_role, x_dev_user_email, db=db)
 
 
 def _apply_rls_context(db: Session, org_id: Optional[uuid.UUID]) -> None:

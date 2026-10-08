@@ -29,7 +29,7 @@ async def project_updates(project_id: uuid.UUID, websocket: WebSocket, token: st
     db = SessionLocal()
     try:
         try:
-            user = await resolve_authenticated_user(token or None)
+            user = await resolve_authenticated_user(token or None, db=db)
             caller_org_id = resolve_org_id(db, user)
             project = db.get(Project, project_id)
         except Exception:
