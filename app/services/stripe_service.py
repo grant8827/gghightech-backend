@@ -68,6 +68,34 @@ def create_checkout_session(
     return checkout_url
 
 
+def create_instant_checkout_session(
+    payment_id: uuid.UUID,
+    amount: float,
+    customer_email: str,
+    description: Optional[str] = None,
+) -> str:
+    """For an InstantPayment — the webhook tells it apart from an invoice
+    by the instant_payment_id metadata key."""
+    data = {
+        "mode": "payment",
+        "success_url": settings.STRIPE_SUCCESS_URL,
+        "cancel_url": settings.STRIPE_CANCEL_URL,
+        "client_reference_id": str(payment_id),
+        "customer_email": customer_email,
+        "metadata[instant_payment_id]": str(payment_id),
+        "payment_intent_data[metadata][instant_payment_id]": str(payment_id),
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(round(amount * 100)),
+        "line_items[0][price_data][product_data][name]": description or "GG HighTech payment",
+        "line_items[0][quantity]": "1",
+    }
+    session = _post("/checkout/sessions", data)
+    checkout_url = session.get("url")
+    if not checkout_url:
+        raise StripeIntegrationError("Stripe did not return a Checkout URL")
+    return checkout_url
+
+
 def create_subscription_checkout_session(
     plan_id: uuid.UUID,
     amount: float,

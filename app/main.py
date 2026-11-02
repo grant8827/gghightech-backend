@@ -8,6 +8,7 @@ from app.api.routes import (
     auth,
     estimates,
     health,
+    instant_payments,
     invoices,
     jira_tickets,
     milestones,
@@ -45,6 +46,7 @@ app.include_router(milestones.router)
 app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(invoices.router)
+app.include_router(instant_payments.router)
 app.include_router(updates.router)
 app.include_router(jira_tickets.router)
 app.include_router(subscriptions.router)

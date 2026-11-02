@@ -6,6 +6,7 @@ schema via Base.metadata.
 
 from app.models.audit_log import AuditLog
 from app.models.estimate import Estimate
+from app.models.instant_payment import InstantPayment
 from app.models.invoice import Invoice
 from app.models.jira_ticket import JiraTicket
 from app.models.milestone import Milestone
@@ -24,6 +25,7 @@ __all__ = [
     "Estimate",
     "AuditLog",
     "Invoice",
+    "InstantPayment",
     "ProjectUpdate",
     "JiraTicket",
     "SubscriptionPlan",

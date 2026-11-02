@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.models.instant_payment import InstantPayment
 from app.models.invoice import Invoice
 from app.models.subscription_plan import SubscriptionPlan
 
@@ -73,6 +74,25 @@ def _mark_invoice_paid(db: Session, session: dict) -> None:
     db.commit()
 
 
+def _mark_instant_payment_paid(db: Session, session: dict) -> None:
+    metadata = session.get("metadata") or {}
+    raw_payment_id = metadata.get("instant_payment_id")
+    if not raw_payment_id or session.get("payment_status") != "paid":
+        return
+    try:
+        payment_id = uuid.UUID(raw_payment_id)
+    except ValueError:
+        logger.warning("Stripe session contains invalid instant_payment_id metadata: %s", raw_payment_id)
+        return
+
+    payment = db.get(InstantPayment, payment_id)
+    if not payment or payment.status == "PAID":
+        return
+    payment.status = "PAID"
+    payment.paid_at = datetime.now(timezone.utc)
+    db.commit()
+
+
 def _sync_subscription(db: Session, stripe_object: dict, event_type: str) -> None:
     metadata = stripe_object.get("metadata") or {}
     raw_plan_id = metadata.get("plan_id")
@@ -117,6 +137,7 @@ async def stripe_webhook(
     data_object = (event.get("data") or {}).get("object") or {}
     if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
         _mark_invoice_paid(db, data_object)
+        _mark_instant_payment_paid(db, data_object)
         if data_object.get("mode") == "subscription":
             _sync_subscription(db, data_object, event_type)
     elif event_type in (
