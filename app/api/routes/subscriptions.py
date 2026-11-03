@@ -18,6 +18,7 @@ from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, requir
 from app.services.email import send_payment_link_email
 from app.services.stripe_service import (
     StripeIntegrationError,
+    cancel_subscription_now,
     create_checkout_session,
     create_subscription_checkout_session,
 )
@@ -27,6 +28,15 @@ logger = logging.getLogger("gghightech.billing")
 router = APIRouter(prefix="/api/v1/subscriptions", tags=["subscriptions"])
 
 _STAFF_ROLES = ("SUPER_ADMIN", "PROJECT_MANAGER", "LEAD_ENGINEER")
+
+
+def length_label(plan: SubscriptionPlan) -> str:
+    """e.g. "5 monthly payments" — empty for a plan with no fixed length."""
+    if not plan.total_cycles:
+        return ""
+    period = "annual" if plan.billing_frequency == "ANNUAL" else "monthly"
+    plural = "" if plan.total_cycles == 1 else "s"
+    return f"{plan.total_cycles} {period} payment{plural}"
 
 
 @router.post("", response_model=SubscriptionPlanOut, status_code=201)
@@ -83,6 +93,17 @@ def update_subscription_plan(
     changes = payload.model_dump(exclude_unset=True)
     if "status" in changes and changes["status"] not in SUBSCRIPTION_STATUSES:
         raise HTTPException(422, f"status must be one of {SUBSCRIPTION_STATUSES}")
+    # Canceling here has to stop Stripe charging the card too — before the
+    # local status changes, so a Stripe failure leaves both in agreement.
+    if (
+        changes.get("status") == "CANCELED"
+        and plan.status not in ("CANCELED", "COMPLETED")
+        and plan.stripe_subscription_id
+    ):
+        try:
+            cancel_subscription_now(plan.stripe_subscription_id)
+        except StripeIntegrationError as exc:
+            raise HTTPException(502, f"Could not cancel the Stripe subscription: {exc}") from exc
     for field, value in changes.items():
         setattr(plan, field, value)
 
@@ -118,13 +139,19 @@ def generate_subscription_invoice(
         raise HTTPException(409, "This plan isn't active")
     if not plan.project_id:
         raise HTTPException(422, "This plan has no project to bill against")
+    if plan.total_cycles and plan.cycles_billed >= plan.total_cycles:
+        raise HTTPException(409, f"All {plan.total_cycles} payments for this plan have been billed")
 
     now = datetime.now(timezone.utc)
+    plan.cycles_billed += 1
+    of_total = f", payment {plan.cycles_billed} of {plan.total_cycles}" if plan.total_cycles else ""
+    if plan.total_cycles and plan.cycles_billed >= plan.total_cycles:
+        plan.status = "COMPLETED"
     invoice = Invoice(
         org_id=plan.org_id,
         project_id=plan.project_id,
         milestone_id=None,
-        description=f"{plan.name} — {now:%B %Y}",
+        description=f"{plan.name} — {now:%B %Y}{of_total}",
         amount=plan.amount,
         status="PENDING",
         # Persisted on the invoice itself (not just used for the
@@ -174,15 +201,23 @@ def create_subscription_checkout(
     plan = db.get(SubscriptionPlan, plan_id)
     if not plan:
         raise HTTPException(404, "Subscription plan not found")
-    if plan.status == "CANCELED":
-        raise HTTPException(409, "Canceled plans cannot start Stripe Checkout")
+    if plan.status in ("CANCELED", "COMPLETED"):
+        raise HTTPException(409, f"{plan.status.title()} plans cannot start Stripe Checkout")
     interval = "year" if plan.billing_frequency == "ANNUAL" else "month"
     try:
+        # The length goes in the product name so the customer sees it on
+        # Stripe's checkout page, e.g. "Retainer (5 monthly payments)".
+        label = length_label(plan)
         checkout_url = create_subscription_checkout_session(
-            plan.id, float(plan.amount), plan.name, interval=interval, customer_email=plan.customer_email
+            plan.id,
+            float(plan.amount),
+            f"{plan.name} ({label})" if label else plan.name,
+            interval=interval,
+            customer_email=plan.customer_email,
         )
     except StripeIntegrationError as exc:
         raise HTTPException(502, str(exc)) from exc
     if plan.customer_email:
-        send_payment_link_email(plan.customer_email, checkout_url, plan.name)
+        label = length_label(plan)
+        send_payment_link_email(plan.customer_email, checkout_url, f"{plan.name} ({label})" if label else plan.name)
     return {"checkout_url": checkout_url}

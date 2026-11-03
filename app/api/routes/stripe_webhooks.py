@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.models.instant_payment import InstantPayment
 from app.models.invoice import Invoice
 from app.models.subscription_plan import SubscriptionPlan
+from app.services.stripe_service import StripeIntegrationError, end_subscription_after_current_period
 
 router = APIRouter(prefix="/api/v1/stripe", tags=["stripe"])
 logger = logging.getLogger("gghightech.stripe_webhooks")
@@ -93,25 +94,87 @@ def _mark_instant_payment_paid(db: Session, session: dict) -> None:
     db.commit()
 
 
+def _subscription_refs(stripe_object: dict) -> tuple[Optional[str], Optional[str]]:
+    """(plan_id from metadata, Stripe subscription id) from whichever kind
+    of object the event carries. Checkout puts plan_id on the subscription's
+    metadata (subscription_data[metadata]); an invoice only has a copy of
+    that under subscription_details — top-level on older Stripe API
+    versions, under `parent` on newer ones."""
+    kind = stripe_object.get("object")
+    if kind == "subscription":
+        return (stripe_object.get("metadata") or {}).get("plan_id"), stripe_object.get("id")
+    if kind == "invoice":
+        details = stripe_object.get("subscription_details") or (stripe_object.get("parent") or {}).get(
+            "subscription_details"
+        ) or {}
+        subscription = stripe_object.get("subscription") or details.get("subscription")
+        if isinstance(subscription, dict):
+            subscription = subscription.get("id")
+        return (details.get("metadata") or {}).get("plan_id"), subscription
+    # checkout.session
+    return (stripe_object.get("metadata") or {}).get("plan_id"), stripe_object.get("subscription")
+
+
+def _find_plan(db: Session, raw_plan_id: Optional[str], subscription_id: Optional[str]) -> Optional[SubscriptionPlan]:
+    if raw_plan_id:
+        try:
+            plan = db.get(SubscriptionPlan, uuid.UUID(raw_plan_id))
+        except ValueError:
+            logger.warning("Stripe event contains invalid plan_id metadata: %s", raw_plan_id)
+            plan = None
+        if plan:
+            return plan
+    if subscription_id:
+        return db.query(SubscriptionPlan).filter(SubscriptionPlan.stripe_subscription_id == subscription_id).first()
+    return None
+
+
+def _count_paid_installment(plan: SubscriptionPlan, invoice: dict) -> None:
+    """One paid Stripe invoice = one billing period. On the last one of a
+    fixed-length plan, tell Stripe not to renew. That call happens before
+    anything is committed: if it fails, the webhook errors, Stripe retries
+    the event later, and nothing has been counted twice."""
+    invoice_id = invoice.get("id")
+    if invoice_id and invoice_id == plan.last_stripe_invoice_id:
+        return  # Stripe redelivered an event already counted
+    if invoice.get("amount_paid", 1) == 0:
+        return  # $0 invoices (e.g. a trial) aren't a paid period
+
+    plan.cycles_billed += 1
+    plan.last_stripe_invoice_id = invoice_id
+    plan.last_invoiced_at = datetime.now(timezone.utc)
+    if plan.total_cycles and plan.cycles_billed >= plan.total_cycles:
+        if plan.stripe_subscription_id:
+            try:
+                end_subscription_after_current_period(plan.stripe_subscription_id)
+            except StripeIntegrationError as exc:
+                logger.error("Could not end Stripe subscription for completed plan %s", plan.id)
+                raise HTTPException(502, "Could not end the Stripe subscription; retry later") from exc
+        plan.status = "COMPLETED"
+    elif plan.status == "PAUSED":
+        plan.status = "ACTIVE"  # a failed payment that has now gone through
+
+
 def _sync_subscription(db: Session, stripe_object: dict, event_type: str) -> None:
-    metadata = stripe_object.get("metadata") or {}
-    raw_plan_id = metadata.get("plan_id")
-    if not raw_plan_id:
-        return
-    try:
-        plan_id = uuid.UUID(raw_plan_id)
-    except ValueError:
-        logger.warning("Stripe event contains invalid plan_id metadata: %s", raw_plan_id)
-        return
-    plan = db.get(SubscriptionPlan, plan_id)
+    raw_plan_id, subscription_id = _subscription_refs(stripe_object)
+    plan = _find_plan(db, raw_plan_id, subscription_id)
     if not plan:
         return
-    if event_type == "customer.subscription.deleted":
-        plan.status = "CANCELED"
-    elif stripe_object.get("status") in ("past_due", "unpaid", "paused"):
+    if subscription_id and not plan.stripe_subscription_id:
+        plan.stripe_subscription_id = subscription_id
+
+    if plan.status == "COMPLETED":
+        pass  # finished — the remaining events (cancel_at_period_end, deleted) change nothing
+    elif event_type == "invoice.paid":
+        _count_paid_installment(plan, stripe_object)
+    elif event_type == "invoice.payment_failed":
         plan.status = "PAUSED"
-    else:
-        plan.status = "ACTIVE"
+    elif event_type == "customer.subscription.deleted":
+        plan.status = "CANCELED"
+    elif event_type == "customer.subscription.updated":
+        plan.status = "PAUSED" if stripe_object.get("status") in ("past_due", "unpaid", "paused") else "ACTIVE"
+    elif plan.status != "CANCELED":
+        plan.status = "ACTIVE"  # checkout completed
     db.commit()
 
 

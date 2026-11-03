@@ -13,6 +13,13 @@ not variations of one thing:
   commitment (is_subscription=False — the original manual
   generate-invoice flow, unchanged).
 
+Any plan can have a fixed length (total_cycles: e.g. 5 monthly payments,
+or 2 annual ones) or run until canceled (NULL). cycles_billed counts
+progress — invoices generated for a manual plan, invoices paid (from the
+Stripe webhook) for a subscription. On reaching total_cycles the plan
+becomes COMPLETED, and a Stripe subscription is set to end at the close
+of that last period so the customer is never charged again.
+
 Deliberately not RLS-protected, same reasoning as JiraTicket: staff-only."""
 
 import uuid
@@ -25,7 +32,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
 
-SUBSCRIPTION_STATUSES = ("ACTIVE", "PAUSED", "CANCELED")
+SUBSCRIPTION_STATUSES = ("ACTIVE", "PAUSED", "CANCELED", "COMPLETED")
+MAX_TOTAL_CYCLES = 120
 BILLING_FREQUENCIES = ("MONTHLY", "ANNUAL")
 
 
@@ -39,6 +47,9 @@ class SubscriptionPlan(Base):
         # manual monthly plan's bookkeeping, so it's nullable for
         # subscriptions/annual plans without weakening this range check.
         CheckConstraint("billing_day BETWEEN 1 AND 28", name="ck_subscription_plans_billing_day_range"),
+        CheckConstraint(
+            f"total_cycles BETWEEN 1 AND {MAX_TOTAL_CYCLES}", name="ck_subscription_plans_total_cycles_range"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -60,6 +71,18 @@ class SubscriptionPlan(Base):
     # so later actions (checkout link, generate-invoice) don't need it
     # re-entered. See app/services/email.py's send_payment_link_email.
     customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Fixed length in billing periods (months or years, per
+    # billing_frequency); NULL runs until canceled. See the docstring.
+    total_cycles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cycles_billed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    # Set by the Stripe webhook once the customer completes Checkout, so the
+    # plan can be ended or canceled on Stripe's side.
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # The last Stripe invoice counted into cycles_billed — Stripe can deliver
+    # the same event more than once, and it must only count once.
+    last_stripe_invoice_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_invoiced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

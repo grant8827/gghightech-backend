@@ -17,10 +17,15 @@ class StripeIntegrationError(RuntimeError):
 
 
 def _post(path: str, data: dict) -> dict:
+    return _request("POST", path, data)
+
+
+def _request(method: str, path: str, data: Optional[dict] = None) -> dict:
     if not settings.STRIPE_SECRET_KEY:
         raise StripeIntegrationError("Stripe is not configured")
     try:
-        response = httpx.post(
+        response = httpx.request(
+            method,
             f"{STRIPE_API_URL}{path}",
             auth=(settings.STRIPE_SECRET_KEY, ""),
             data=data,
@@ -126,3 +131,14 @@ def create_subscription_checkout_session(
     if not checkout_url:
         raise StripeIntegrationError("Stripe did not return a subscription Checkout URL")
     return checkout_url
+
+
+def end_subscription_after_current_period(subscription_id: str) -> None:
+    """For a fixed-length plan whose last installment just got paid: no
+    further renewal invoices, access runs to the end of the paid period."""
+    _post(f"/subscriptions/{subscription_id}", {"cancel_at_period_end": "true"})
+
+
+def cancel_subscription_now(subscription_id: str) -> None:
+    """Staff canceled the plan: stop billing immediately."""
+    _request("DELETE", f"/subscriptions/{subscription_id}")

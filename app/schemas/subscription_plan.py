@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
-from app.models.subscription_plan import BILLING_FREQUENCIES
+from app.models.subscription_plan import BILLING_FREQUENCIES, MAX_TOTAL_CYCLES
 
 
 class SubscriptionPlanCreate(BaseModel):
@@ -16,6 +16,8 @@ class SubscriptionPlanCreate(BaseModel):
     is_subscription: bool = False
     billing_day: Optional[int] = Field(default=None, ge=1, le=28)
     customer_email: Optional[EmailStr] = None
+    # Number of billing periods (months or years); None = until canceled.
+    total_cycles: Optional[int] = Field(default=None, ge=1, le=MAX_TOTAL_CYCLES)
 
     @model_validator(mode="after")
     def validate_frequency(self) -> "SubscriptionPlanCreate":
@@ -49,6 +51,9 @@ class SubscriptionPlanOut(BaseModel):
     billing_day: Optional[int]
     customer_email: Optional[str]
     status: str
+    total_cycles: Optional[int]
+    cycles_billed: int
+    stripe_subscription_id: Optional[str]
     created_at: datetime
     last_invoiced_at: Optional[datetime]
 
