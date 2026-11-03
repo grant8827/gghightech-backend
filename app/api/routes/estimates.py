@@ -12,7 +12,7 @@ from app.models.estimate import Estimate
 from app.schemas.estimate import EstimateCreate, EstimateCreated, EstimateOptions, EstimateOut, EstimatePreview
 from app.services.audit import record_audit_event
 from app.services.auth import get_current_user, require_roles
-from app.services.email import send_lead_notification
+from app.services.email import send_estimate_pdf_email, send_lead_notification
 from app.services.local_auth import create_estimate_pdf_token, decode_estimate_pdf_token
 from app.services.pdf import build_estimate_pdf
 from app.services.pricing import (
@@ -24,7 +24,7 @@ from app.services.pricing import (
     calculate_update_estimate,
     infrastructure_totals,
 )
-from app.services.rate_limit import Rule, rate_limit
+from app.services.rate_limit import Rule, limiter, rate_limit
 from app.services.scope_analysis import analyze_scope
 
 router = APIRouter(prefix="/api/v1/estimates", tags=["estimates"])
@@ -39,6 +39,11 @@ def _create_rules() -> list[Rule]:
         (settings.ESTIMATE_CREATE_LIMIT_PER_10_MIN, 10 * 60),
         (settings.ESTIMATE_CREATE_LIMIT_PER_DAY, 24 * 60 * 60),
     ]
+
+
+# The estimator is public, so without this anyone could have the site
+# email PDFs to any inbox. Per recipient address, across all callers.
+_ESTIMATE_EMAIL_RULES: list[Rule] = [(3, 24 * 60 * 60)]
 
 
 def _preview_rules() -> list[Rule]:
@@ -221,6 +226,11 @@ def create_estimate(payload: EstimateCreate, db: Session = Depends(get_db)) -> E
             + (f" | client says: {payload.project_description}" if payload.project_description else ""),
         )
 
+    if payload.client_email:
+        email_key = payload.client_email.strip().lower()
+        if limiter.hit(f"estimate-email:{email_key}", _ESTIMATE_EMAIL_RULES) == 0:
+            send_estimate_pdf_email(payload.client_email, str(estimate.id), _build_pdf(estimate))
+
     # The only way an anonymous submitter can fetch this estimate's PDF
     # afterwards — reading an estimate is otherwise staff-only (see
     # _authorize_estimate_pdf below).
@@ -275,14 +285,9 @@ async def _authorize_estimate_pdf(
         raise HTTPException(403, f"Requires one of roles: {_STAFF_ROLES}")
 
 
-@router.get("/{estimate_id}/pdf", dependencies=[Depends(_authorize_estimate_pdf)])
-def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
-    estimate = db.get(Estimate, estimate_id)
-    if not estimate:
-        raise HTTPException(404, "Estimate not found")
-
+def _build_pdf(estimate: Estimate) -> bytes:
     scope = estimate.scope_configuration
-    pdf_bytes = build_estimate_pdf(
+    return build_estimate_pdf(
         estimate_id=estimate.id,
         project_type=scope["project_type"],
         features=scope["features"],
@@ -306,6 +311,15 @@ def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> R
         client_email=estimate.client_email,
         client_phone=estimate.client_phone,
     )
+
+
+@router.get("/{estimate_id}/pdf", dependencies=[Depends(_authorize_estimate_pdf)])
+def get_estimate_pdf(estimate_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    estimate = db.get(Estimate, estimate_id)
+    if not estimate:
+        raise HTTPException(404, "Estimate not found")
+
+    pdf_bytes = _build_pdf(estimate)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

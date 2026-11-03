@@ -322,10 +322,23 @@ def test_submitting_an_estimate_notifies_the_team_and_logs_no_lead_details(clien
     response = client.post("/api/v1/estimates", json=ESTIMATE_BODY)
 
     assert response.status_code == 201
-    (sent,) = mailgun.sent
-    assert sent["data"]["to"] == "leads@gghightech.example"
-    assert LEAD_EMAIL in sent["data"]["text"] and BRIEF in sent["data"]["text"]
+    team, visitor = mailgun.sent
+    assert team["data"]["to"] == "leads@gghightech.example"
+    assert LEAD_EMAIL in team["data"]["text"] and BRIEF in team["data"]["text"]
+    assert team["files"] is None
+    # The visitor gets their estimate as a PDF attachment.
+    assert visitor["data"]["to"] == LEAD_EMAIL
+    ((field, (filename, content, mime)),) = visitor["files"]
+    assert field == "attachment" and filename.endswith(".pdf") and mime == "application/pdf"
+    assert content.startswith(b"%PDF")
     assert_clean(logs, LEAD_EMAIL, LEAD_PHONE, BRIEF)
+
+
+def test_the_estimate_pdf_email_is_capped_per_recipient(client, mailgun):
+    for _ in range(4):
+        assert client.post("/api/v1/estimates", json=ESTIMATE_BODY).status_code == 201
+    to_visitor = [s for s in mailgun.sent if s["data"]["to"] == LEAD_EMAIL]
+    assert len(to_visitor) == 3
 
 
 def test_submitting_an_estimate_in_production_without_mail_logs_no_lead_details(client, configure, outbox, logs):

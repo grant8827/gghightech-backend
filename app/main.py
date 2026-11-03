@@ -26,7 +26,15 @@ from app.middleware import SecurityHeadersMiddleware
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title=settings.APP_NAME)
+# The interactive docs and OpenAPI schema map every endpoint — useful
+# locally, nothing the public needs (audit SEC-12).
+_docs = settings.is_development
+app = FastAPI(
+    title=settings.APP_NAME,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(

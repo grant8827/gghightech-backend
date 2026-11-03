@@ -1,7 +1,7 @@
 """
 Transactional email via Mailgun's HTTP API.
 
-The three public functions below are the only call sites the rest of the
+The public send_* functions below are the only call sites the rest of the
 app uses, so changing provider stays a one-file change.
 
 Two rules this module exists to keep:
@@ -51,8 +51,15 @@ def _one_line(value: str) -> str:
     return " ".join(value.split())[:200]
 
 
-def _send(kind: str, to: str, subject: str, text: str) -> bool:
-    """Returns whether Mailgun accepted the message."""
+def _send(
+    kind: str,
+    to: str,
+    subject: str,
+    text: str,
+    attachments: Optional[list[tuple[str, bytes, str]]] = None,
+) -> bool:
+    """Returns whether Mailgun accepted the message. `attachments` is a
+    list of (filename, content, MIME type)."""
     if not email_configured():
         if settings.is_development:
             # Development only: with no mail account configured, this is
@@ -88,6 +95,7 @@ def _send(kind: str, to: str, subject: str, text: str) -> bool:
                 # link that is itself a credential.
                 "o:tracking": "no",
             },
+            files=[("attachment", attachment) for attachment in attachments or []] or None,
             timeout=_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 — see rule 2 in the module docstring
@@ -140,3 +148,36 @@ def send_payment_link_email(customer_email: str, checkout_url: str, description:
         "Payment is handled by Stripe. If you have any questions, just reply to this email.\n"
     )
     return _send("payment-link", customer_email, f"Payment link: {description}", text)
+
+
+def send_password_reset_email(email: str, full_name: str, reset_link: str) -> bool:
+    """Sent by POST /auth/forgot-password (app/api/routes/auth.py)."""
+    text = (
+        f"Hi {full_name},\n\n"
+        "Someone asked to reset the password for your GG HighTech account. "
+        "Use the link below to choose a new one:\n\n"
+        f"{reset_link}\n\n"
+        "This link works once and expires in 60 minutes. If you didn't ask for this, you can ignore "
+        "this email — your password won't change.\n"
+    )
+    return _send("password-reset", email, "Reset your GG HighTech password", text)
+
+
+def send_estimate_pdf_email(email: str, estimate_id: str, pdf_bytes: bytes) -> bool:
+    """Sent to a visitor who left an email on the public estimator
+    (POST /estimates, app/api/routes/estimates.py), with their estimate
+    attached."""
+    text = (
+        "Hello,\n\n"
+        "Thanks for using the GG HighTech project estimator. Your estimate is attached as a PDF.\n\n"
+        "It's a starting point, not a quote — we'll follow up to talk through your project and firm up "
+        "the details. If you have questions in the meantime, just reply to this email.\n\n"
+        "— GG HighTech\n"
+    )
+    return _send(
+        "estimate-pdf",
+        email,
+        "Your GG HighTech project estimate",
+        text,
+        attachments=[(f"gghightech-estimate-{estimate_id[:8]}.pdf", pdf_bytes, "application/pdf")],
+    )

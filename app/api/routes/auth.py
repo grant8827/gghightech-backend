@@ -11,15 +11,25 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.auth import AcceptInviteRequest, LoginRequest, LoginResponse
+from app.schemas.auth import (
+    AcceptInviteRequest,
+    ForgotPasswordRequest,
+    LoginRequest,
+    LoginResponse,
+    ResetPasswordRequest,
+)
 from app.services.audit import record_audit_event
 from app.services.auth import AuthenticatedUser, get_current_user
+from app.services.email import send_password_reset_email
 from app.services.rate_limit import Rule, client_ip, limiter, rate_limit
 from app.services.local_auth import (
     create_access_token_for,
     create_or_update_superadmin,
+    create_password_reset_token,
     decode_invite_token,
+    decode_password_reset_token,
     hash_password,
+    password_reset_token_matches,
     revoke_sessions,
     verify_password,
 )
@@ -33,6 +43,11 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # shouldn't accept unlimited guesses.
 _ACCEPT_INVITE_RULES: list[Rule] = [(10, 10 * 60)]
 _BOOTSTRAP_RULES: list[Rule] = [(5, 60 * 60)]
+# forgot-password sends email, so it's limited per IP and, separately, per
+# address — the second stops one inbox being flooded from many IPs.
+_FORGOT_PASSWORD_IP_RULES: list[Rule] = [(5, 15 * 60)]
+_FORGOT_PASSWORD_EMAIL_RULES: list[Rule] = [(3, 60 * 60)]
+_RESET_PASSWORD_RULES: list[Rule] = [(10, 10 * 60)]
 
 
 def _login_ip_rules() -> list[Rule]:
@@ -142,6 +157,88 @@ def accept_invite(payload: AcceptInviteRequest, db: Session = Depends(get_db)) -
         db,
         user=AuthenticatedUser(user_id=str(user.id), email=user.email, role=user.role),
         action="user.accept_invite",
+        resource_type="user",
+        resource_id=user.id,
+        org_id=user.org_id,
+        metadata={},
+    )
+    db.commit()
+
+    token = create_access_token_for(user)
+    return LoginResponse(access_token=token, role=user.role, email=user.email, full_name=user.full_name)
+
+
+@router.post(
+    "/forgot-password",
+    status_code=202,
+    dependencies=[Depends(rate_limit("forgot-password", lambda: _FORGOT_PASSWORD_IP_RULES))],
+)
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
+    """Emails a reset link if the address belongs to an account. The
+    response is the same either way, so this can't be used to find out
+    which emails have accounts. Also rescues an invited user whose invite
+    expired before they set a password."""
+    message = {"detail": "If that email has an account, a reset link is on its way."}
+    if not settings.SECRET_KEY:
+        raise HTTPException(503, "Local login is not configured on this server")
+
+    email_key = payload.email.strip().lower()
+    if limiter.hit(f"forgot-password:{email_key}", _FORGOT_PASSWORD_EMAIL_RULES) > 0:
+        return message
+
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user:
+        return message
+
+    reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={create_password_reset_token(user)}"
+    send_password_reset_email(user.email, user.full_name, reset_link)
+    record_audit_event(
+        db,
+        user=None,
+        action="auth.password_reset_requested",
+        resource_type="user",
+        resource_id=user.id,
+        org_id=user.org_id,
+        metadata={},
+    )
+    db.commit()
+    return message
+
+
+@router.post(
+    "/reset-password",
+    response_model=LoginResponse,
+    dependencies=[Depends(rate_limit("reset-password", lambda: _RESET_PASSWORD_RULES))],
+)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    """Second half of forgot-password. Sets the new password, signs the
+    user out everywhere else, and signs them in here (same response as
+    /login)."""
+    if not settings.SECRET_KEY:
+        raise HTTPException(503, "Local login is not configured on this server")
+
+    invalid = HTTPException(401, "This reset link is invalid or has expired — request a new one")
+    try:
+        claims = decode_password_reset_token(payload.token)
+        user_id = uuid.UUID(claims["sub"])
+    except (jwt.PyJWTError, ValueError):
+        raise invalid
+    user = db.get(User, user_id)
+    if not user or not password_reset_token_matches(claims, user):
+        raise invalid
+    if len(payload.password) < 12:
+        raise HTTPException(422, "Password must be at least 12 characters")
+
+    user.password_hash = hash_password(payload.password)
+    revoke_sessions(user)
+    # A successful reset proves control of the inbox; don't leave the
+    # account locked out by failures that came before it.
+    email_key = user.email.strip().lower()
+    limiter.forget(f"login-fail:{email_key}")
+    record_audit_event(
+        db,
+        user=AuthenticatedUser(user_id=str(user.id), email=user.email, role=user.role),
+        action="auth.password_reset",
         resource_type="user",
         resource_id=user.id,
         org_id=user.org_id,

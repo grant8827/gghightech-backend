@@ -14,11 +14,17 @@ token kinds share this signing key but are never interchangeable:
     app/api/routes/users.py's invite_user) so they can set their own
     password at POST /auth/accept-invite. Tagged with "purpose": "invite"
     so one can never be used in place of the other.
+  - password reset tokens (create_password_reset_token/
+    decode_password_reset_token): a 60-minute link emailed by POST
+    /auth/forgot-password. Tagged "purpose": "password_reset", and bound
+    to a fingerprint of the password hash at issue time, so it stops
+    working the moment the password changes — i.e. it's single-use.
 
 The first (and so far only) staff account this issues tokens for is created
 via `python -m app.cli create-superadmin` — see that file.
 """
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -32,6 +38,9 @@ from app.models.user import User
 
 ALGORITHM = "HS256"
 INVITE_TOKEN_EXPIRE_DAYS = 7
+
+PASSWORD_RESET_PURPOSE = "password_reset"
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 60
 
 ESTIMATE_PDF_PURPOSE = "estimate_pdf"
 ESTIMATE_PDF_TOKEN_EXPIRE_MINUTES = 60
@@ -101,6 +110,33 @@ def decode_invite_token(token: str) -> dict[str, Any]:
     if claims.get("purpose") != "invite":
         raise jwt.InvalidTokenError("Not an invite token")
     return claims
+
+
+def _password_fingerprint(user: User) -> str:
+    """Changes whenever the password does (including from "never set" to
+    set), without putting anything usable about the hash in the token."""
+    return hashlib.sha256(f"{user.id}:{user.password_hash or ''}".encode()).hexdigest()[:32]
+
+
+def create_password_reset_token(user: User) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    payload = {"sub": str(user.id), "purpose": PASSWORD_RESET_PURPOSE, "pwf": _password_fingerprint(user), "exp": expire}
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_password_reset_token(token: str) -> dict[str, Any]:
+    """Raises jwt.PyJWTError on any failure, including a validly signed
+    token of a different kind. The caller must still check
+    password_reset_token_matches() against the user row."""
+    claims = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM], options={"require": ["exp", "sub"]})
+    if claims.get("purpose") != PASSWORD_RESET_PURPOSE:
+        raise jwt.InvalidTokenError("Not a password reset token")
+    return claims
+
+
+def password_reset_token_matches(claims: dict[str, Any], user: User) -> bool:
+    """False once the password has changed since the token was issued."""
+    return claims.get("pwf") == _password_fingerprint(user)
 
 
 def create_estimate_pdf_token(estimate_id: str) -> str:
