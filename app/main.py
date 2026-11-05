@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     audit,
     auth,
+    email_server,
     estimates,
     health,
     instant_payments,
@@ -53,6 +54,7 @@ app.include_router(projects.router)
 app.include_router(milestones.router)
 app.include_router(users.router)
 app.include_router(audit.router)
+app.include_router(email_server.router)
 app.include_router(invoices.router)
 app.include_router(instant_payments.router)
 app.include_router(updates.router)

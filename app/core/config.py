@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     # Where new-lead notifications are sent.
     LEAD_NOTIFICATION_EMAIL: str = "leads@gghightech.example"
 
+    # Email Server management service (backend-java), reached through
+    # app/api/routes/email_server.py. Blank EMAIL_SERVICE_URL switches the
+    # whole feature off: the admin tab stays hidden. Point it at the service's
+    # private Railway address, never a public one.
+    EMAIL_SERVICE_URL: str = ""
+    EMAIL_SERVICE_TOKEN: str = ""
+
     # Billing (invoice payment). Stubbed — see app/services/stripe_service.py.
     # Fill in once a Stripe account exists.
     STRIPE_SECRET_KEY: str = ""
