@@ -57,6 +57,7 @@ def _send(
     subject: str,
     text: str,
     attachments: Optional[list[tuple[str, bytes, str]]] = None,
+    reply_to: Optional[str] = None,
 ) -> bool:
     """Returns whether Mailgun accepted the message. `attachments` is a
     list of (filename, content, MIME type)."""
@@ -94,6 +95,8 @@ def _send(
                 # Mailgun and records it there — not something to do to a
                 # link that is itself a credential.
                 "o:tracking": "no",
+                # Lets staff answer a contact message with plain Reply.
+                **({"h:Reply-To": _one_line(reply_to)} if reply_to else {}),
             },
             files=[("attachment", attachment) for attachment in attachments or []] or None,
             timeout=_TIMEOUT_SECONDS,
@@ -124,6 +127,36 @@ def send_lead_notification(estimate_id: str, client_email: Optional[str], summar
         f"Review it in the admin dashboard: {settings.FRONTEND_URL.rstrip('/')}/admin\n"
     )
     return _send("lead-notification", settings.LEAD_NOTIFICATION_EMAIL, f"New estimate request {estimate_id[:8]}", text)
+
+
+def send_contact_notification(
+    message_id: str,
+    name: str,
+    email: str,
+    phone: Optional[str],
+    subject: Optional[str],
+    message: str,
+) -> bool:
+    """Tell the team (LEAD_NOTIFICATION_EMAIL) about a new contact-form
+    message (app/api/routes/messages.py). The message is already saved and
+    shown in the admin Messages tab; this email is a heads-up, and Reply
+    goes straight to the sender."""
+    text = (
+        "A new message was sent from the website.\n\n"
+        f"From: {name} <{email}>\n"
+        f"Phone: {phone or '(none given)'}\n"
+        f"Subject: {subject or '(none)'}\n\n"
+        f"{message}\n\n"
+        f"Reply to this email to answer {name} directly, or see it in the admin dashboard: "
+        f"{settings.FRONTEND_URL.rstrip('/')}/admin\n"
+    )
+    return _send(
+        "contact-notification",
+        settings.LEAD_NOTIFICATION_EMAIL,
+        f"New message from {name}" + (f": {subject}" if subject else ""),
+        text,
+        reply_to=email,
+    )
 
 
 def send_invite_email(email: str, full_name: str, invite_link: str) -> bool:

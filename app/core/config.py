@@ -144,6 +144,11 @@ class Settings(BaseSettings):
     REVIEW_SUBMIT_LIMIT_PER_HOUR: int = Field(default=3, ge=0)
     REVIEW_SUBMIT_LIMIT_PER_DAY: int = Field(default=10, ge=0)
 
+    # Public contact form (app/api/routes/messages.py). Messages per IP
+    # address. 0 disables a limit.
+    CONTACT_SUBMIT_LIMIT_PER_HOUR: int = Field(default=5, ge=0)
+    CONTACT_SUBMIT_LIMIT_PER_DAY: int = Field(default=20, ge=0)
+
     # Brute-force protection for POST /auth/login (app/api/routes/auth.py).
     # 0 disables a limit. Attempts per IP address, successful or not:
     LOGIN_ATTEMPTS_PER_IP_PER_5_MIN: int = Field(default=20, ge=0)

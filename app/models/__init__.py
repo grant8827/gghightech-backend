@@ -5,6 +5,7 @@ schema via Base.metadata.
 """
 
 from app.models.audit_log import AuditLog
+from app.models.contact_message import ContactMessage
 from app.models.estimate import Estimate
 from app.models.instant_payment import InstantPayment
 from app.models.invoice import Invoice
@@ -30,4 +31,5 @@ __all__ = [
     "JiraTicket",
     "SubscriptionPlan",
     "Review",
+    "ContactMessage",
 ]
