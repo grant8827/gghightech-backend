@@ -12,7 +12,7 @@ from app.models.project import DEPLOYMENT_STATUSES, PROJECT_STATUSES, Project
 from app.schemas.project import ProjectCreate, ProjectDeploymentUpdate, ProjectOut, ProjectUpdate
 from app.services.audit import record_audit_event
 from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, get_current_user_org_id, require_roles
-from app.services.github_service import GithubSyncError, fetch_recent_commits
+from app.services.github_service import GithubSyncError, fetch_repo_activity
 from app.services.project_sync import apply_commits
 from app.services.jira_service import JiraNotConfiguredError, JiraSyncError, fetch_issue_progress
 from app.ws import manager
@@ -55,7 +55,7 @@ def create_project(
         # stop the project being created; the admin's "Sync from GitHub now"
         # shows the reason.
         try:
-            apply_commits(project, fetch_recent_commits(project.repository_url))
+            apply_commits(project, *fetch_repo_activity(project.repository_url))
         except GithubSyncError as exc:
             logger.info("Initial GitHub sync for new project %s skipped: %s", project.id, exc)
     commit_with_rls_refresh(db, project, None)
@@ -109,6 +109,7 @@ async def update_project(
     if "repository_url" in changes and changes["repository_url"] != project.repository_url:
         # Commits from the previous repo would mislead the client.
         project.recent_commits = None
+        project.commit_activity = None
         project.latest_commit_sha = None
         project.latest_commit_message = None
         project.latest_commit_synced_at = None
@@ -142,11 +143,11 @@ async def sync_project_github(
         raise HTTPException(422, "Set a repository_url for this project first")
 
     try:
-        commits = fetch_recent_commits(project.repository_url)
+        commits, activity = fetch_repo_activity(project.repository_url)
     except GithubSyncError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    apply_commits(project, commits)
+    apply_commits(project, commits, activity)
 
     record_audit_event(
         db,

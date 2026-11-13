@@ -63,6 +63,16 @@ class CommitOut(BaseModel):
     url: Optional[str] = None
 
 
+class ActivityWeek(BaseModel):
+    start: str
+    commits: int
+
+
+class CommitActivity(BaseModel):
+    weeks: list[ActivityWeek]
+    capped: bool = False
+
+
 class ProjectCreate(BaseModel):
     org_id: uuid.UUID
     title: str
@@ -106,6 +116,7 @@ class ProjectOut(BaseModel):
     jira_synced_at: Optional[datetime]
     live_url: Optional[str] = None
     recent_commits: Optional[list[CommitOut]] = None
+    commit_activity: Optional[CommitActivity] = None
     overall_progress: int = Field(..., description="Average milestone progress_percentage (GGH-301)")
     created_at: datetime
 

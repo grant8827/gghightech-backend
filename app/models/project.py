@@ -64,6 +64,9 @@ class Project(Base):
     # [{sha, message, author, committed_at, url}] — refreshed by GitHub sync
     # (app/services/project_sync.py) and shown to the client as recent work.
     recent_commits: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # {"weeks": [{"start": "YYYY-MM-DD", "commits": n}, ...12, oldest first],
+    # "capped": bool} — the client dashboard's activity chart. Same sync.
+    commit_activity: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="projects")

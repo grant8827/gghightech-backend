@@ -15,6 +15,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -22,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.project import Project
-from app.services.github_service import GithubSyncError, fetch_recent_commits
+from app.services.github_service import GithubSyncError, fetch_repo_activity
 from app.ws import manager
 
 logger = logging.getLogger(__name__)
@@ -31,11 +32,13 @@ logger = logging.getLogger(__name__)
 _FIRST_PASS_DELAY_SECONDS = 30
 
 
-def apply_commits(project: Project, commits: list[dict]) -> bool:
-    """Store a fetch_recent_commits() result on the project. Returns True
+def apply_commits(project: Project, commits: list[dict], activity: Optional[dict] = None) -> bool:
+    """Store a fetch_repo_activity() result on the project. Returns True
     when the newest commit changed (so clients are worth notifying)."""
     changed = project.latest_commit_sha != commits[0]["sha"]
     project.recent_commits = commits
+    if activity is not None:
+        project.commit_activity = activity
     project.latest_commit_sha = commits[0]["sha"]
     project.latest_commit_message = commits[0]["message"]
     project.latest_commit_synced_at = datetime.now(timezone.utc)
@@ -58,7 +61,7 @@ def _repos_to_sync() -> list[tuple[uuid.UUID, str]]:
         db.close()
 
 
-def _save(project_id: uuid.UUID, repository_url: str, commits: list[dict]) -> bool:
+def _save(project_id: uuid.UUID, repository_url: str, commits: list[dict], activity: dict) -> bool:
     db = SessionLocal()
     try:
         _bypass_rls(db)
@@ -67,7 +70,7 @@ def _save(project_id: uuid.UUID, repository_url: str, commits: list[dict]) -> bo
         # while GitHub was being asked.
         if not project or project.repository_url != repository_url:
             return False
-        changed = apply_commits(project, commits)
+        changed = apply_commits(project, commits, activity)
         db.commit()
         return changed
     finally:
@@ -81,8 +84,8 @@ async def sync_all_projects() -> int:
     changed = 0
     for project_id, repository_url in await asyncio.to_thread(_repos_to_sync):
         try:
-            commits = await asyncio.to_thread(fetch_recent_commits, repository_url)
-            if await asyncio.to_thread(_save, project_id, repository_url, commits):
+            commits, activity = await asyncio.to_thread(fetch_repo_activity, repository_url)
+            if await asyncio.to_thread(_save, project_id, repository_url, commits, activity):
                 changed += 1
                 await manager.broadcast(project_id, {"type": "github_synced"})
         except GithubSyncError as exc:

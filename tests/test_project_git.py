@@ -174,7 +174,9 @@ def test_sync_stores_recent_commits_the_client_can_read(client, db, github):
 
     synced = client.post(f"{PROJECTS}/{project.id}/sync-github", headers=as_role(db))
     assert synced.status_code == 200
-    assert github["calls"] == ["https://api.github.com/repos/acme/site/commits"]
+    # The 12-week window first; it held fewer than 5 commits, so the newest
+    # 5 are fetched separately for the "recent work" list.
+    assert github["calls"] == ["https://api.github.com/repos/acme/site/commits"] * 2
 
     seen = client.get(f"{PROJECTS}/{project.id}", headers=as_role(db, "CLIENT_VIEWER", project.org_id)).json()
     assert seen["live_url"] == "https://acme.com"
@@ -281,3 +283,31 @@ def test_create_project_still_works_when_github_fails(client, db, github):
     )
     assert response.status_code == 201
     assert response.json()["recent_commits"] is None
+
+
+def test_weekly_activity_buckets_by_monday_week():
+    from datetime import date
+
+    from app.services.github_service import weekly_activity
+
+    commits = [
+        {"committed_at": "2026-11-13T10:00:00Z"},  # Fri, this week
+        {"committed_at": "2026-11-09T00:30:00Z"},  # Mon, this week
+        {"committed_at": "2026-11-08T23:59:00Z"},  # Sun, last week
+        {"committed_at": "2026-08-01T12:00:00Z"},  # before the window: ignored
+        {"committed_at": "not a date"},
+    ]
+    weeks = weekly_activity(commits, today=date(2026, 11, 13))
+    assert len(weeks) == 12
+    assert weeks[-1] == {"start": "2026-11-09", "commits": 2}
+    assert weeks[-2] == {"start": "2026-11-02", "commits": 1}
+    assert weeks[0]["start"] == "2026-08-24"
+    assert sum(w["commits"] for w in weeks) == 3
+
+
+def test_sync_stores_activity_for_the_chart(client, db, github):
+    project = make_project(db, repository_url="https://github.com/acme/site")
+    body = client.post(f"{PROJECTS}/{project.id}/sync-github", headers=as_role(db)).json()
+    activity = body["commit_activity"]
+    assert len(activity["weeks"]) == 12
+    assert activity["capped"] is False
