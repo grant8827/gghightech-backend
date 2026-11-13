@@ -70,11 +70,18 @@ class ProjectCreate(BaseModel):
     status: str = "DISCOVERY"
     budget_estimate: Optional[float] = None
     repository_url: Optional[str] = None
+    live_url: Optional[str] = None
+    staging_url: Optional[str] = None
 
     @field_validator("repository_url")
     @classmethod
     def _repo(cls, v: Optional[str]) -> Optional[str]:
         return normalize_repository_url(v)
+
+    @field_validator("staging_url", "live_url")
+    @classmethod
+    def _site(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_site_url(v)
 
 
 class ProjectOut(BaseModel):

@@ -241,3 +241,43 @@ def test_background_pass_syncs_every_repo_and_survives_failures(factory, db, git
     broadcasts.clear()
     assert asyncio.run(project_sync.sync_all_projects()) == 0
     assert broadcasts == []
+
+
+def test_create_project_with_repo_and_domain_syncs_right_away(client, db, github):
+    org = Organization(id=uuid.uuid4(), name="Acme")
+    db.add(org)
+    db.commit()
+    response = client.post(
+        PROJECTS,
+        json={
+            "org_id": str(org.id),
+            "title": "Acme site",
+            "slug": "acme-site",
+            "repository_url": "acme/site",
+            "live_url": "acme.com",
+            "staging_url": "staging.acme.com",
+        },
+        headers=as_role(db),
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert (body["repository_url"], body["live_url"], body["staging_url"]) == (
+        "https://github.com/acme/site",
+        "https://acme.com",
+        "https://staging.acme.com",
+    )
+    assert body["latest_commit_message"] == "Add checkout page"
+
+
+def test_create_project_still_works_when_github_fails(client, db, github):
+    org = Organization(id=uuid.uuid4(), name="Acme")
+    db.add(org)
+    db.commit()
+    github["status"] = 404
+    response = client.post(
+        PROJECTS,
+        json={"org_id": str(org.id), "title": "Acme", "slug": "acme", "repository_url": "acme/private"},
+        headers=as_role(db),
+    )
+    assert response.status_code == 201
+    assert response.json()["recent_commits"] is None

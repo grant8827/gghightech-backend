@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 import uuid
@@ -15,6 +16,8 @@ from app.services.github_service import GithubSyncError, fetch_recent_commits
 from app.services.project_sync import apply_commits
 from app.services.jira_service import JiraNotConfiguredError, JiraSyncError, fetch_issue_progress
 from app.ws import manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -46,6 +49,15 @@ def create_project(
         org_id=project.org_id,
         metadata=payload.model_dump(mode="json"),
     )
+    if project.repository_url:
+        # First sync right away so the client dashboard has commits from the
+        # start. Best-effort: a private repo without GITHUB_TOKEN shouldn't
+        # stop the project being created; the admin's "Sync from GitHub now"
+        # shows the reason.
+        try:
+            apply_commits(project, fetch_recent_commits(project.repository_url))
+        except GithubSyncError as exc:
+            logger.info("Initial GitHub sync for new project %s skipped: %s", project.id, exc)
     commit_with_rls_refresh(db, project, None)
     return project
 
