@@ -16,11 +16,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
 INVOICE_STATUSES = ("PENDING", "PAID")
+# How a PAID invoice was paid. CARD is set by the Stripe webhook; the rest
+# are recorded by staff via PATCH /invoices/{id}/mark-paid. Shown on the
+# client's receipt (GET /invoices/{id}/receipt).
+PAYMENT_METHODS = ("CARD", "CHECK", "WIRE", "CASH", "OTHER")
 
 
 class Invoice(Base):
     __tablename__ = "invoices"
-    __table_args__ = (CheckConstraint(f"status IN {INVOICE_STATUSES}", name="ck_invoices_status_valid"),)
+    __table_args__ = (
+        CheckConstraint(f"status IN {INVOICE_STATUSES}", name="ck_invoices_status_valid"),
+        CheckConstraint(
+            f"payment_method IS NULL OR payment_method IN {PAYMENT_METHODS}",
+            name="ck_invoices_payment_method_valid",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"))
@@ -39,3 +49,7 @@ class Invoice(Base):
     customer_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Null until paid; see PAYMENT_METHODS above.
+    payment_method: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Check number, wire reference, or Stripe PaymentIntent id.
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

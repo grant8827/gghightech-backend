@@ -3,7 +3,7 @@ from typing import Optional
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,7 @@ from app.db.session import get_db
 from app.models.invoice import Invoice
 from app.models.milestone import Milestone
 from app.models.project import Project
-from app.schemas.invoice import InvoiceCreate, InvoiceOut
+from app.schemas.invoice import InvoiceCreate, InvoiceMarkPaid, InvoiceOut
 from app.services.audit import record_audit_event
 from app.services.auth import (
     AuthenticatedUser,
@@ -21,7 +21,7 @@ from app.services.auth import (
     require_roles,
 )
 from app.services.email import send_payment_link_email
-from app.services.pdf import build_invoice_pdf
+from app.services.pdf import build_invoice_pdf, build_receipt_pdf
 from app.services.stripe_service import StripeIntegrationError, create_checkout_session
 
 router = APIRouter(prefix="/api/v1/invoices", tags=["invoices"])
@@ -145,6 +145,37 @@ def get_invoice_pdf(
     )
 
 
+@router.get("/{invoice_id}/receipt")
+def get_invoice_receipt(
+    invoice_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    caller_org_id: Optional[uuid.UUID] = Depends(get_current_user_org_id),
+) -> Response:
+    """Receipt PDF for a paid invoice — whether the client paid online by
+    card (Stripe webhook) or staff recorded a check / wire / cash payment."""
+    invoice = _get_scoped_invoice(db, invoice_id, caller_org_id)
+    if invoice.status != "PAID":
+        raise HTTPException(409, "This invoice hasn't been paid yet, so there's no receipt")
+    milestone = db.get(Milestone, invoice.milestone_id) if invoice.milestone_id else None
+    project = db.get(Project, invoice.project_id)
+
+    pdf_bytes = build_receipt_pdf(
+        invoice_id=invoice.id,
+        project_title=project.title if project else "Unknown project",
+        paid_for=milestone.title if milestone else (invoice.description or "Ad-hoc invoice"),
+        amount=float(invoice.amount),
+        issued_at=invoice.created_at,
+        paid_at=invoice.paid_at or invoice.created_at,
+        payment_method=invoice.payment_method or "OTHER",
+        payment_reference=invoice.payment_reference,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="gghightech-receipt-{invoice.id}.pdf"'},
+    )
+
+
 @router.post("/{invoice_id}/pay")
 async def pay_invoice(
     invoice_id: uuid.UUID,
@@ -175,6 +206,9 @@ async def pay_invoice(
 @router.patch("/{invoice_id}/mark-paid", response_model=InvoiceOut)
 def mark_invoice_paid(
     invoice_id: uuid.UUID,
+    # Optional so existing callers that send no body still work (recorded
+    # as OTHER).
+    payload: Optional[InvoiceMarkPaid] = Body(None),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_roles(*_STAFF_ROLES)),
 ) -> Invoice:
@@ -186,8 +220,11 @@ def mark_invoice_paid(
     if invoice.status == "PAID":
         raise HTTPException(409, "This invoice is already paid")
 
+    payload = payload or InvoiceMarkPaid()
     invoice.status = "PAID"
     invoice.paid_at = datetime.now(timezone.utc)
+    invoice.payment_method = payload.payment_method
+    invoice.payment_reference = (payload.payment_reference or "").strip() or None
     record_audit_event(
         db,
         user=user,
@@ -195,7 +232,7 @@ def mark_invoice_paid(
         resource_type="invoice",
         resource_id=invoice.id,
         org_id=invoice.org_id,
-        metadata={"amount": float(invoice.amount)},
+        metadata={"amount": float(invoice.amount), "payment_method": payload.payment_method},
     )
     commit_with_rls_refresh(db, invoice, None)
     return invoice

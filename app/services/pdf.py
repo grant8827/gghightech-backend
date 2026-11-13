@@ -11,12 +11,17 @@ BRAND_COLOR = (17, 24, 39)  # near-black, matches the dark hero theme in GGH-101
 ACCENT_COLOR = (232, 184, 75)  # gold, sampled from the logo — see frontend/app/globals.css
 
 
+# Common typographic characters outside latin-1, swapped for close ASCII
+# equivalents so they don't print as "?".
+_TYPOGRAPHY = str.maketrans({"\u2014": "-", "\u2013": "-", "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2026": "..."})
+
+
 def _latin1_safe(text: str) -> str:
     """The core Helvetica font fpdf2 uses here only supports latin-1. Client
     free-text (project_description) is unconstrained input, so anything
     outside that range (emoji, non-Latin scripts) gets replaced rather than
     raising and failing the whole PDF export."""
-    return text.encode("latin-1", errors="replace").decode("latin-1")
+    return text.translate(_TYPOGRAPHY).encode("latin-1", errors="replace").decode("latin-1")
 
 
 _REQUEST_TYPE_LABELS = {"NEW": "New Build", "UPDATE": "Project Update", "MAINTENANCE": "Maintenance Plan"}
@@ -199,6 +204,95 @@ def build_invoice_pdf(
         pdf.cell(0, 7, f"Paid: {paid_at.strftime('%Y-%m-%d')}", ln=True)
     pdf.ln(10)
 
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(130, 130, 130)
+    pdf.cell(0, 5, f"Invoice reference: {invoice_id}", ln=True)
+
+    return bytes(pdf.output())
+
+
+PAYMENT_METHOD_LABELS = {
+    "CARD": "Card (paid online)",
+    "CHECK": "Check",
+    "WIRE": "Bank transfer / wire",
+    "CASH": "Cash",
+    "OTHER": "Recorded by GG HighTech",
+}
+
+
+def receipt_number(invoice_id: uuid.UUID) -> str:
+    """Short, human-friendly reference printed on the receipt and shown in
+    the portal. Derived from the invoice id, so it never changes."""
+    return f"R-{invoice_id.hex[:8].upper()}"
+
+
+def build_receipt_pdf(
+    invoice_id: uuid.UUID,
+    project_title: str,
+    paid_for: str,
+    amount: float,
+    issued_at: datetime,
+    paid_at: datetime,
+    payment_method: str,
+    payment_reference: Optional[str] = None,
+) -> bytes:
+    """Proof of payment for a PAID invoice — see GET /invoices/{id}/receipt.
+    paid_for follows build_invoice_pdf's billed_for."""
+    pdf = FPDF(format="Letter")
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*BRAND_COLOR)
+    pdf.cell(0, 12, "GG HighTech", ln=True)
+
+    pdf.set_font("Helvetica", "", 12)
+    pdf.set_text_color(90, 90, 90)
+    pdf.cell(0, 8, "Payment Receipt", ln=True)
+    pdf.ln(4)
+
+    pdf.set_draw_color(*ACCENT_COLOR)
+    pdf.set_line_width(0.8)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(8)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(45, 7, "Receipt number")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, receipt_number(invoice_id), ln=True)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(45, 7, "Date paid")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, paid_at.strftime("%B %d, %Y"), ln=True)
+    pdf.ln(6)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Paid for", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"Project: {_latin1_safe(project_title)}", ln=True)
+    pdf.multi_cell(0, 7, f"For: {_latin1_safe(paid_for)}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Invoice issued: {issued_at.strftime('%B %d, %Y')}", ln=True)
+    pdf.ln(6)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, "Payment", ln=True)
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"Method: {PAYMENT_METHOD_LABELS.get(payment_method, payment_method)}", ln=True)
+    if payment_reference:
+        pdf.cell(0, 7, f"Reference: {_latin1_safe(payment_reference)}", ln=True)
+    pdf.ln(4)
+
+    pdf.set_fill_color(*ACCENT_COLOR)
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 12, f"  Amount paid: ${amount:,.2f}", ln=True, fill=True)
+    pdf.ln(10)
+
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(90, 90, 90)
+    pdf.multi_cell(
+        0, 5, "Thank you for your payment. Please keep this receipt for your records.", new_x="LMARGIN", new_y="NEXT"
+    )
+    pdf.ln(4)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(130, 130, 130)
     pdf.cell(0, 5, f"Invoice reference: {invoice_id}", ln=True)

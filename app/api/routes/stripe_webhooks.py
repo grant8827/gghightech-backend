@@ -72,6 +72,9 @@ def _mark_invoice_paid(db: Session, session: dict) -> None:
         return
     invoice.status = "PAID"
     invoice.paid_at = datetime.now(timezone.utc)
+    invoice.payment_method = "CARD"
+    payment_intent = session.get("payment_intent")
+    invoice.payment_reference = payment_intent if isinstance(payment_intent, str) else None
     db.commit()
 
 
