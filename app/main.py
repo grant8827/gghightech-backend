@@ -1,4 +1,7 @@
+import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,13 +28,29 @@ from app.api.routes import (
 )
 from app.core.config import settings
 from app.middleware import SecurityHeadersMiddleware
+from app.services.project_sync import run_github_autosync
 
 logging.basicConfig(level=logging.INFO)
 
 # The interactive docs and OpenAPI schema map every endpoint — useful
 # locally, nothing the public needs (audit SEC-12).
 _docs = settings.is_development
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    task = asyncio.create_task(run_github_autosync()) if settings.GITHUB_SYNC_INTERVAL_MINUTES > 0 else None
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.APP_NAME,
     docs_url="/docs" if _docs else None,
     redoc_url="/redoc" if _docs else None,

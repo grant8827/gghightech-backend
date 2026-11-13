@@ -172,6 +172,12 @@ class Settings(BaseSettings):
     # for private repos or a higher rate limit: a fine-grained PAT with
     # read-only "Contents" access is enough.
     GITHUB_TOKEN: str = ""
+    # How often every project with a repository_url is re-synced from GitHub
+    # in the background (app/services/project_sync.py), so the client
+    # dashboard stays current without staff pressing "Sync". 0 turns it off.
+    # 15 minutes keeps a handful of public repos well inside GitHub's
+    # unauthenticated limit of 60 requests an hour.
+    GITHUB_SYNC_INTERVAL_MINUTES: int = Field(default=15, ge=0)
 
     # Jira sync (app/services/jira_service.py). All three required — Jira's
     # API needs auth for every call, unlike GitHub's. JIRA_BASE_URL is your

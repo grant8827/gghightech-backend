@@ -11,7 +11,8 @@ from app.models.project import DEPLOYMENT_STATUSES, PROJECT_STATUSES, Project
 from app.schemas.project import ProjectCreate, ProjectDeploymentUpdate, ProjectOut, ProjectUpdate
 from app.services.audit import record_audit_event
 from app.services.auth import AuthenticatedUser, commit_with_rls_refresh, get_current_user_org_id, require_roles
-from app.services.github_service import GithubSyncError, fetch_latest_commit
+from app.services.github_service import GithubSyncError, fetch_recent_commits
+from app.services.project_sync import apply_commits
 from app.services.jira_service import JiraNotConfiguredError, JiraSyncError, fetch_issue_progress
 from app.ws import manager
 
@@ -93,6 +94,12 @@ async def update_project(
     changes = payload.model_dump(exclude_unset=True)
     if "status" in changes and changes["status"] not in PROJECT_STATUSES:
         raise HTTPException(422, f"status must be one of {PROJECT_STATUSES}")
+    if "repository_url" in changes and changes["repository_url"] != project.repository_url:
+        # Commits from the previous repo would mislead the client.
+        project.recent_commits = None
+        project.latest_commit_sha = None
+        project.latest_commit_message = None
+        project.latest_commit_synced_at = None
     for field, value in changes.items():
         setattr(project, field, value)
 
@@ -123,13 +130,11 @@ async def sync_project_github(
         raise HTTPException(422, "Set a repository_url for this project first")
 
     try:
-        commit = fetch_latest_commit(project.repository_url)
+        commits = fetch_recent_commits(project.repository_url)
     except GithubSyncError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    project.latest_commit_sha = commit["sha"]
-    project.latest_commit_message = commit["message"]
-    project.latest_commit_synced_at = datetime.now(timezone.utc)
+    apply_commits(project, commits)
 
     record_audit_event(
         db,
@@ -138,7 +143,7 @@ async def sync_project_github(
         resource_type="project",
         resource_id=project.id,
         org_id=project.org_id,
-        metadata={"sha": commit["sha"]},
+        metadata={"sha": commits[0]["sha"]},
     )
     commit_with_rls_refresh(db, project, None)
     await manager.broadcast(project.id, {"type": "github_synced"})

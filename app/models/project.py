@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -57,6 +57,13 @@ class Project(Base):
     jira_done_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     jira_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # The client's real website (e.g. https://acme.com), shown in the client
+    # dashboard next to staging_url's preview.
+    live_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Last few commits on the repo's default branch, newest first, as
+    # [{sha, message, author, committed_at, url}] — refreshed by GitHub sync
+    # (app/services/project_sync.py) and shown to the client as recent work.
+    recent_commits: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization"] = relationship(back_populates="projects")
