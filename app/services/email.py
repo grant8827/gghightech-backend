@@ -183,6 +183,72 @@ def send_payment_link_email(customer_email: str, checkout_url: str, description:
     return _send("payment-link", customer_email, f"Payment link: {description}", text)
 
 
+def send_invoice_email(
+    to: str,
+    name: Optional[str],
+    number: str,
+    project_title: str,
+    total: float,
+    due_date,
+    pay_url: Optional[str],
+    portal_url: str,
+    pdf: tuple[str, bytes],
+) -> bool:
+    """Sent by POST /invoices/{id}/send (app/api/routes/invoices.py)."""
+    due = due_date.strftime("%B %d, %Y") if due_date else "on receipt"
+    pay = f"Pay securely online by card:\n{pay_url}\n\n" if pay_url else ""
+    text = (
+        f"Hi {name or 'there'},\n\n"
+        f"Please find attached invoice {number} for {project_title}.\n\n"
+        f"Amount due: ${total:,.2f}\n"
+        f"Due date: {due}\n\n"
+        f"{pay}"
+        f"You can also view, pay and download receipts from your client dashboard:\n{portal_url}\n\n"
+        f"Thank you for your business,\n{settings.BUSINESS_NAME}\n"
+    )
+    filename, content = pdf
+    return _send(
+        "invoice",
+        to,
+        f"Invoice {number} from {settings.BUSINESS_NAME} - ${total:,.2f} due {due}",
+        text,
+        attachments=[(filename, content, "application/pdf")],
+        reply_to=settings.BUSINESS_EMAIL or None,
+    )
+
+
+def send_contract_email(to: str, name: str, number: str, title: str, portal_url: str, pdf: tuple[str, bytes]) -> bool:
+    """Sent by POST /contracts/{id}/send (app/api/routes/contracts.py)."""
+    text = (
+        f"Hi {name},\n\n"
+        f"Your agreement {number}, \"{title}\", is ready for review and signature. A copy is attached.\n\n"
+        f"To sign it, sign in to your client dashboard and open Contracts:\n{portal_url}\n\n"
+        f"If anything needs changing, just reply to this email.\n\n"
+        f"Thank you,\n{settings.BUSINESS_NAME}\n"
+    )
+    filename, content = pdf
+    return _send(
+        "contract",
+        to,
+        f"Please review and sign: {title} ({number})",
+        text,
+        attachments=[(filename, content, "application/pdf")],
+        reply_to=settings.BUSINESS_EMAIL or None,
+    )
+
+
+def send_contract_signed_email(to: str, number: str, title: str, signer_name: str, pdf: tuple[str, bytes]) -> bool:
+    """Signed copy, sent to the client and to the team when a contract is
+    signed (POST /contracts/{id}/sign)."""
+    text = (
+        f"Agreement {number}, \"{title}\", was signed by {signer_name}.\n\n"
+        "The fully signed copy is attached for your records.\n\n"
+        f"{settings.BUSINESS_NAME}\n"
+    )
+    filename, content = pdf
+    return _send("contract-signed", to, f"Signed: {title} ({number})", text, attachments=[(filename, content, "application/pdf")])
+
+
 def send_password_reset_email(email: str, full_name: str, reset_link: str) -> bool:
     """Sent by POST /auth/forgot-password (app/api/routes/auth.py)."""
     text = (

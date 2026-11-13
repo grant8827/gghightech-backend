@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     # Where new-lead notifications are sent.
     LEAD_NOTIFICATION_EMAIL: str = "leads@gghightech.example"
 
+    # Printed on invoices, receipts and contracts (app/services/documents.py).
+    # Blank fields are simply left off the document.
+    BUSINESS_NAME: str = "GG HighTech"
+    BUSINESS_EMAIL: str = ""
+    BUSINESS_PHONE: str = ""
+    BUSINESS_ADDRESS: str = ""  # use "\n" between lines
+    BUSINESS_WEBSITE: str = "gghightech.org"
+    # Default for new invoices when staff don't pick a due date.
+    INVOICE_DEFAULT_DUE_DAYS: int = Field(default=14, ge=0, le=365)
+
     # Email Server management service (backend-java), reached through
     # app/api/routes/email_server.py. Blank EMAIL_SERVICE_URL switches the
     # whole feature off: the admin tab stays hidden. Point it at the service's

@@ -9,11 +9,14 @@ from typing import Optional
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from datetime import date
+
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Numeric, String, Text, event, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.models.numbering import next_document_number
 
 INVOICE_STATUSES = ("PENDING", "PAID")
 # How a PAID invoice was paid. CARD is set by the Stripe webhook; the rest
@@ -53,3 +56,29 @@ class Invoice(Base):
     payment_method: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     # Check number, wire reference, or Stripe PaymentIntent id.
     payment_reference: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+
+    # ---- Professional invoice fields (Invoicing / Contracts tab) ----
+    # INV-YYYY-NNNN, assigned on insert (see _assign_number below).
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
+    # [{description, quantity, unit_price}] — null for older single-amount
+    # invoices (milestone approvals, subscriptions), whose PDF shows one line.
+    line_items: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    subtotal: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    tax_rate: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)  # percent
+    tax_amount: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    issue_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bill_to_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # When staff last emailed it to the client (POST /invoices/{id}/send).
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+@event.listens_for(Invoice, "before_insert")
+def _assign_number(mapper, connection, target: Invoice) -> None:
+    if target.issue_date is None:
+        target.issue_date = datetime.now().date()
+    if not target.invoice_number:
+        target.invoice_number = next_document_number(
+            connection, Invoice.__table__, Invoice.__table__.c.invoice_number, "invoice_number_seq", "INV"
+        )

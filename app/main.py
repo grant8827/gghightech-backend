@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import (
     audit,
     auth,
+    contracts,
     email_server,
     estimates,
     health,
@@ -76,6 +77,7 @@ app.include_router(users.router)
 app.include_router(audit.router)
 app.include_router(email_server.router)
 app.include_router(invoices.router)
+app.include_router(contracts.router)
 app.include_router(instant_payments.router)
 app.include_router(updates.router)
 app.include_router(jira_tickets.router)
